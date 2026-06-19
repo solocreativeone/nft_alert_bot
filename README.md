@@ -1,6 +1,6 @@
 # 🤖 NFT Alert Bot
 
-A lightweight Ethereum NFT bot that tracks **floor price movements** and **new mints** - and sends real-time alerts straight to your Telegram.
+A lightweight Ethereum NFT bot that tracks **floor price movements** and **new mints** — and sends real-time alerts straight to your Telegram.
 
 No webhooks. No complex infrastructure. One service, runs forever on Render's free tier.
 
@@ -20,7 +20,7 @@ No webhooks. No complex infrastructure. One service, runs forever on Render's fr
 
 - Python 3.10+
 - A [Telegram bot token](https://t.me/BotFather)
-- A [Reservoir API key](https://reservoir.tools) (free tier)
+- An [OpenSea API key](https://opensea.io/developers) (free tier)
 
 ---
 
@@ -29,7 +29,7 @@ No webhooks. No complex infrastructure. One service, runs forever on Render's fr
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/nft-alert-bot.git
+git clone https://github.com/solocreativeone/nft-alert-bot.git
 cd nft-alert-bot
 ```
 
@@ -47,9 +47,9 @@ pip install -r requirements.txt
 4. Start a chat with your new bot
 5. Visit `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` to find your **chat ID**
 
-### 4. Get a Reservoir API key
+### 4. Get an OpenSea API key
 
-Sign up at [reservoir.tools](https://reservoir.tools) and copy your API key from the dashboard.
+Sign up at [opensea.io/developers](https://opensea.io/developers) and copy your API key from the dashboard. No credit card required on the free tier.
 
 ### 5. Configure your collections
 
@@ -74,7 +74,7 @@ Create a `.env` file locally (never commit this):
 ```
 TELEGRAM_TOKEN=your_token_here
 CHAT_ID=your_chat_id_here
-RESERVOIR_API_KEY=your_reservoir_key
+OPENSEA_API_KEY=your_opensea_key
 ```
 
 Or export them directly:
@@ -82,7 +82,7 @@ Or export them directly:
 ```bash
 export TELEGRAM_TOKEN=...
 export CHAT_ID=...
-export RESERVOIR_API_KEY=...
+export OPENSEA_API_KEY=...
 ```
 
 ### 7. Run locally
@@ -101,7 +101,7 @@ python bot.py
 4. Set the following environment variables in the Render dashboard:
    - `TELEGRAM_TOKEN`
    - `CHAT_ID`
-   - `RESERVOIR_API_KEY`
+   - `OPENSEA_API_KEY`
 5. Click **Deploy**
 
 Render will keep the bot running 24/7 on the free tier.
@@ -112,7 +112,7 @@ Render will keep the bot running 24/7 on the free tier.
 
 ```
 nft-alert-bot/
-├── bot.py           # Entry point - schedules and runs everything
+├── bot.py           # Entry point — schedules and runs everything
 ├── floor.py         # Floor price checker and alert logic
 ├── mint.py          # Mint tracker via polling
 ├── config.py        # Collections config and env var loading
@@ -135,7 +135,7 @@ nft-alert-bot/
 
 ## License
 
-MIT - free to use, modify, and distribute.
+MIT — free to use, modify, and distribute.
 
 ---
 
