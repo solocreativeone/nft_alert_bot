@@ -2,7 +2,7 @@
 
 A lightweight Ethereum NFT bot that tracks **floor price movements** and **new mints** — and sends real-time alerts straight to your Telegram.
 
-No webhooks. No complex infrastructure. One service, runs forever on Render's free tier.
+No webhooks. No complex infrastructure. One service. Runs forever on Render's free tier.
 
 ---
 
@@ -135,7 +135,7 @@ nft-alert-bot/
 
 ## License
 
-MIT — free to use, modify, and distribute.
+MIT - free to use, modify, and distribute.
 
 ---
 
