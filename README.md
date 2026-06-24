@@ -10,7 +10,8 @@ No webhooks. No complex infrastructure. One service. Runs forever on Render's fr
 
 ## Features
 
-- 🆕 **New Drop Alerts** - detects brand new ERC-721/1155 collections the moment they start minting on Ethereum
+- 🆕 **New Drop Alerts** - blockchain event listener that detects brand new 
+  ERC-721/1155 collections the moment they start minting on Ethereum
 - 🚨 **Floor Drop Alerts** - get notified when a collection's floor falls below your target
 - 🚀 **Floor Pump Alerts** - get notified when a collection's floor rises above your target
 - 🟢 **Mint Tracker** - detects new mints in real-time by polling on-chain transfer events
