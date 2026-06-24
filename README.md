@@ -1,8 +1,8 @@
 # 🤖 NFT Alert Bot
 
-A lightweight Ethereum NFT bot that tracks **floor price movements**, 
-**new mints**, and **new collection drops** - and sends real-time alerts 
-straight to your Telegram.
+A lightweight Ethereum NFT bot and **on-chain event crawler** that tracks 
+**floor price movements**, **new mints**, and **new collection drops** -
+and sends real-time alerts straight to your Telegram.
 
 No webhooks. No complex infrastructure. One service. Runs forever on Render's free tier.
 
