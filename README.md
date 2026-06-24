@@ -121,7 +121,7 @@ Render will keep the bot running 24/7 on the free tier.
 ```
 nft-alert-bot/
 ├── drops.py         # New drop detector via Alchemy
-├──bot.py           # Entry point — schedules and runs everything
+├──bot.py           # Entry point - schedules and runs everything
 ├── floor.py         # Floor price checker and alert logic
 ├── mint.py          # Mint tracker via polling
 ├── config.py        # Collections config and env var loading
