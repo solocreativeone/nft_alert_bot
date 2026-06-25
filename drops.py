@@ -3,19 +3,20 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 from telegram import Bot
 
-# Fallback import — private config takes priority
+
+# Fallback import - private config takes priority
 try:
-    from private.config_live import TELEGRAM_TOKEN, CHAT_ID, ALCHEMY_API_KEY
-except ImportError:
-    from config import TELEGRAM_TOKEN, CHAT_ID, ALCHEMY_API_KEY
+    from private.config_live import TELEGRAM_TOKEN, CHAT_ID, ALCHEMY_API_KEY, MIN_MINTS_THRESHOLD
+    print("[Drops] ✅ Private config loaded")
+except ImportError as e:
+    print(f"[Drops] ❌ ImportError: {e}")
+    from config import TELEGRAM_TOKEN, CHAT_ID, ALCHEMY_API_KEY, MIN_MINTS_THRESHOLD
+
 
 bot = Bot(token=TELEGRAM_TOKEN)
 
 # Track contracts we've already alerted on to avoid duplicates
 alerted_contracts = set()
-
-# Minimum mints before we consider it a real drop (filters out test mints)
-MIN_MINTS_THRESHOLD = 5
 
 async def send(msg):
     await bot.send_message(chat_id=CHAT_ID, text=msg)
