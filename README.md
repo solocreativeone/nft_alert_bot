@@ -10,13 +10,13 @@ No webhooks. No complex infrastructure. One service. Runs forever on Railway's f
 
 ## Features
 
-- 🆕 **New Drop Alerts** — blockchain event listener that detects brand new 
+- 🆕 **New Drop Alerts** - blockchain event listener that detects brand new 
     ERC-721/1155 collections the moment they start minting on Ethereum
-- 🚨 **Floor Drop Alerts** — get notified when a collection's floor falls below your target
-- 🚀 **Floor Pump Alerts** — get notified when a collection's floor rises above your target
-- 🟢 **Mint Tracker** — detects new mints in real-time by polling on-chain transfer events
-- 📬 **Telegram delivery** — all alerts go straight to your Telegram DM
-- ☁️ **Railway-ready** — deploys as a background worker, runs 24/7 for free
+- 🚨 **Floor Drop Alerts** - get notified when a collection's floor falls below your target
+- 🚀 **Floor Pump Alerts** - get notified when a collection's floor rises above your target
+- 🟢 **Mint Tracker** - detects new mints in real-time by polling on-chain transfer events
+- 📬 **Telegram delivery** - all alerts go straight to your Telegram DM
+- ☁️ **Railway-ready** - deploys as a background worker, runs 24/7 for free
  
 ---
 
