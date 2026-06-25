@@ -1,19 +1,23 @@
 # 🤖 NFT Alert Bot
 
-A lightweight Ethereum NFT bot that tracks **floor price movements** and **new mints** — and sends real-time alerts straight to your Telegram.
+A lightweight Ethereum NFT bot and **on-chain event crawler** that tracks 
+**floor price movements**, **new mints**, and **new collection drops** -
+and sends real-time alerts straight to your Telegram.
 
-No webhooks. No complex infrastructure. One service, runs forever on Render's free tier.
+No webhooks. No complex infrastructure. One service. Runs forever on Render's free tier.
 
 ---
 
 ## Features
 
+- 🆕 **New Drop Alerts** - blockchain event listener that detects brand new 
+  ERC-721/1155 collections the moment they start minting on Ethereum
 - 🚨 **Floor Drop Alerts** - get notified when a collection's floor falls below your target
 - 🚀 **Floor Pump Alerts** - get notified when a collection's floor rises above your target
 - 🟢 **Mint Tracker** - detects new mints in real-time by polling on-chain transfer events
 - 📬 **Telegram delivery** - all alerts go straight to your Telegram DM
 - ☁️ **Render-ready** - deploys as a background worker, runs 24/7 for free
-
+ 
 ---
 
 ## Prerequisites
@@ -21,6 +25,7 @@ No webhooks. No complex infrastructure. One service, runs forever on Render's fr
 - Python 3.10+
 - A [Telegram bot token](https://t.me/BotFather)
 - An [OpenSea API key](https://opensea.io/developers) (free tier)
+- An [Alchemy API key](https://alchemy.com) (free tier) - for new drop detection
 
 ---
 
@@ -75,6 +80,7 @@ Create a `.env` file locally (never commit this):
 TELEGRAM_TOKEN=your_token_here
 CHAT_ID=your_chat_id_here
 OPENSEA_API_KEY=your_opensea_key
+ALCHEMY_API_KEY=your_alchemy_key
 ```
 
 Or export them directly:
@@ -83,6 +89,7 @@ Or export them directly:
 export TELEGRAM_TOKEN=...
 export CHAT_ID=...
 export OPENSEA_API_KEY=...
+export ALCHEMY_API_KEY=your_alchemy_key=...
 ```
 
 ### 7. Run locally
@@ -102,6 +109,8 @@ python bot.py
    - `TELEGRAM_TOKEN`
    - `CHAT_ID`
    - `OPENSEA_API_KEY`
+   - `ALCHEMY_API_KEY`
+
 5. Click **Deploy**
 
 Render will keep the bot running 24/7 on the free tier.
@@ -112,7 +121,8 @@ Render will keep the bot running 24/7 on the free tier.
 
 ```
 nft-alert-bot/
-├── bot.py           # Entry point — schedules and runs everything
+├── drops.py         # New drop detector via Alchemy
+├──bot.py           # Entry point - schedules and runs everything
 ├── floor.py         # Floor price checker and alert logic
 ├── mint.py          # Mint tracker via polling
 ├── config.py        # Collections config and env var loading
@@ -135,7 +145,7 @@ nft-alert-bot/
 
 ## License
 
-MIT — free to use, modify, and distribute.
+MIT - free to use, modify, and distribute.
 
 ---
 
