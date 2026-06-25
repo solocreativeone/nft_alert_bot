@@ -9,7 +9,6 @@ except ImportError:
     from config import TELEGRAM_TOKEN, CHAT_ID, OPENSEA_API_KEY, COLLECTIONS
 
 bot = Bot(token=TELEGRAM_TOKEN)
-floor_last_alerted = {}
 
 async def send(msg):
     await bot.send_message(chat_id=CHAT_ID, text=msg)
