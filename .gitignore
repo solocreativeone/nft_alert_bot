@@ -1,3 +1,12 @@
+# Environment
 .env
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# Virtual environment
 venv/
-.venv/
+
+# Private config - never commit this
+private/
