@@ -1,8 +1,7 @@
 import requests
 import asyncio
-from datetime import datetime, timezone
+import xml.etree.ElementTree as ET
 from telegram import Bot
-from bs4 import BeautifulSoup
 
 # Fallback import — private config takes priority
 try:
@@ -15,81 +14,131 @@ bot = Bot(token=TELEGRAM_TOKEN)
 # Track drops we've already alerted on
 alerted_drops = set()
 
-CALENDAR_URL = "https://nftcalendar.io/b/ethereum/"
+# RSS feed URLs
+RSS_FEEDS = [
+    {
+        "name": "NFTCalendar",
+        "url": "https://nftcalendar.io/feed/",
+    },
+    {
+        "name": "NFT Evening",
+        "url": "https://nftevening.com/feed/",
+    },
+]
 
-async def send(msg):
-    await bot.send_message(chat_id=CHAT_ID, text=msg)
+# Must have at least one of these to be considered a drop
+DROP_KEYWORDS = [
+    "free mint", "public mint", "whitelist mint", "nft drop",
+    "minting now", "mint date", "mint price", "presale",
+    "allowlist", "nft launch", "collection drop", "mint opens",
+    "upcoming mint", "nft release"
+]
 
-def get_upcoming_drops():
-    """
-    Scrapes nftcalendar.io for upcoming Ethereum drops.
-    Returns a list of dicts with name, date, and link.
-    """
-    headers = {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-    res = requests.get(CALENDAR_URL, headers=headers, timeout=15)
+# Always skip if any of these appear
+NEWS_KEYWORDS = [
+    "weekly drop", "price drop", "drops since", "token airdrop",
+    "hack", "stolen", "lawsuit", "validator", "stablecoin",
+    "prediction", "analysis", "report", "regulation", "sec",
+    "joins", "partnership", "raises", "funding", "etf",
+    "plunges", "rallying", "outperform", "collapse", "airdrop",
+    "hodler", "binance", "coinbase", "blackrock", "bybit"
+]
+
+def parse_rss(feed_url):
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; NFTAlertBot/1.0)"}
+    res = requests.get(feed_url, headers=headers, timeout=15)
     res.raise_for_status()
 
-    soup = BeautifulSoup(res.text, "html.parser")
-    drops = []
+    root = ET.fromstring(res.content)
+    channel = root.find("channel")
+    if not channel:
+        return []
 
-    # nftcalendar.io uses event cards with class "event-card"
-    cards = soup.find_all("div", class_="event-item")
+    items = []
+    for item in channel.findall("item"):
+        title = item.findtext("title", "").strip()
+        link = item.findtext("link", "").strip()
+        pub_date = item.findtext("pubDate", "").strip()
+        description = item.findtext("description", "").strip()
 
-    for card in cards:
-        try:
-            # Extract name
-            name_tag = card.find("h3") or card.find("h2") or card.find("strong")
-            name = name_tag.get_text(strip=True) if name_tag else "Unknown"
-
-            # Extract date
-            date_tag = card.find("time") or card.find(class_=lambda x: x and "date" in x.lower())
-            date_str = date_tag.get_text(strip=True) if date_tag else "TBA"
-
-            # Extract link
-            link_tag = card.find("a", href=True)
-            link = f"https://nftcalendar.io{link_tag['href']}" if link_tag else CALENDAR_URL
-
-            drops.append({
-                "name": name,
-                "date": date_str,
+        if title and link:
+            items.append({
+                "title": title,
                 "link": link,
+                "date": pub_date,
+                "description": description[:200] if description else "",
             })
-        except Exception:
-            continue
 
-    return drops
+    return items
+
+def is_drop_announcement(item):
+    """Return True only for actual drop/mint announcements."""
+    text = (item["title"] + " " + item["description"]).lower()
+
+    # Skip news articles first
+    if any(kw in text for kw in NEWS_KEYWORDS):
+        return False
+
+    # Must contain a strong drop keyword
+    if not any(kw in text for kw in DROP_KEYWORDS):
+        return False
+
+    # Skip Solana-only or Bitcoin-only drops
+    other_chains = ["solana", "polygon", "bitcoin ordinal"]
+    eth_keywords = ["ethereum", "eth ", "erc-721", "erc721", "mainnet"]
+    is_other_only = any(kw in text for kw in other_chains) and not any(kw in text for kw in eth_keywords)
+
+    return not is_other_only
 
 def check_calendar():
-    print("[Calendar] Checking for upcoming NFT drops...")
-    try:
-        drops = get_upcoming_drops()
+    print("[Calendar] Checking RSS feeds for upcoming NFT drops...")
+    total_alerted = 0
+    messages_to_send = []
 
-        if not drops:
-            print("[Calendar] No upcoming drops found")
-            return
+    for feed in RSS_FEEDS:
+        try:
+            items = parse_rss(feed["url"])
+            print(f"[Calendar] {feed['name']}: {len(items)} items — filtering...")
 
-        print(f"[Calendar] Found {len(drops)} upcoming drop(s)")
+            for item in items:
+                drop_key = item["link"]
 
-        for drop in drops:
-            # Use name as unique key to avoid duplicate alerts
-            drop_key = drop["name"].lower().replace(" ", "-")
+                if drop_key in alerted_drops:
+                    continue
 
-            if drop_key in alerted_drops:
-                continue
+                if not is_drop_announcement(item):
+                    continue
 
-            alerted_drops.add(drop_key)
+                alerted_drops.add(drop_key)
+                total_alerted += 1
 
-            asyncio.run(send(
-                f"📅 Upcoming NFT Drop!\n"
-                f"Name: {drop['name']}\n"
-                f"Date: {drop['date']}\n"
-                f"Chain: Ethereum\n"
-                f"🔗 {drop['link']}"
-            ))
-            print(f"[Calendar] 📅 Alerted: {drop['name']} — {drop['date']}")
+                messages_to_send.append(
+                    f"📅 Upcoming NFT Drop!\n"
+                    f"Name: {item['title']}\n"
+                    f"Date: {item['date']}\n"
+                    f"Source: {feed['name']}\n"
+                    f"🔗 {item['link']}"
+                )
+                print(f"[Calendar] 📅 Queued: {item['title']}")
 
-    except Exception as e:
-        print(f"[Calendar Error] {e}")
+        except Exception as e:
+            print(f"[Calendar Error] {feed['name']}: {e}")
+
+    # Send all messages in one async batch
+    if messages_to_send:
+        async def send_all():
+            for msg in messages_to_send:
+                try:
+                    await bot.send_message(chat_id=CHAT_ID, text=msg)
+                except Exception as e:
+                    print(f"[Calendar] Failed to send message: {e}")
+
+        try:
+            asyncio.run(send_all())
+        except Exception as e:
+            print(f"[Calendar] Telegram send error: {e}")
+
+    if total_alerted == 0:
+        print("[Calendar] No new drop announcements found")
+    else:
+        print(f"[Calendar] ✅ Sent {total_alerted} drop alert(s)")
