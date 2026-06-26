@@ -18,8 +18,10 @@ COLLECTIONS = [
 ]
 
 # How often to poll (in minutes)
-FLOOR_CHECK_INTERVAL = 5
-MINT_CHECK_INTERVAL = 1
-DROPS_CHECK_INTERVAL = 2  # new drop detection every 2 minutes
-MINT_COOLDOWN_MINUTES = 10   # min gap between mint alerts per collection
-MIN_MINTS_THRESHOLD = 20     # min mints before alerting on a new drop
+# How often to poll (in minutes) — override via Railway environment variables
+FLOOR_CHECK_INTERVAL = int(os.environ.get("FLOOR_CHECK_INTERVAL", 5))
+MINT_CHECK_INTERVAL = int(os.environ.get("MINT_CHECK_INTERVAL", 1))
+DROPS_CHECK_INTERVAL = int(os.environ.get("DROPS_CHECK_INTERVAL", 1))
+MINT_COOLDOWN_MINUTES = int(os.environ.get("MINT_COOLDOWN_MINUTES", 10))
+MIN_MINTS_THRESHOLD = int(os.environ.get("MIN_MINTS_THRESHOLD", 5))
+FLOOR_COOLDOWN_MINUTES = int(os.environ.get("FLOOR_COOLDOWN_MINUTES", 30))
