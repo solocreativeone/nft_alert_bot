@@ -134,7 +134,7 @@ Railway will keep the bot running 24/7. Monitor logs under the **Deployments** t
 
 ```
 nft-alert-bot/
-├── bot.py                # Entry point — schedules and runs everything
+├── bot.py                # Entry point - schedules and runs everything
 ├── floor.py              # Floor price checker and alert logic
 ├── mint.py               # Mint tracker via polling
 ├── drops.py              # New drop detector via Alchemy
