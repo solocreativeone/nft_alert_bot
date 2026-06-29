@@ -2,6 +2,7 @@ import requests
 import asyncio
 from datetime import datetime, timezone, timedelta
 from telegram import Bot
+from watchlist import merge_with_config
 
 # Fallback import — private config takes priority
 try:
@@ -11,20 +12,16 @@ except ImportError:
 
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# Track last seen mint timestamp per collection — avoids duplicate alerts
+# Track last seen mint timestamp per collection
 last_seen = {}
 
-# Track last alert time per collection — cooldown system
+# Cooldown tracker
 mint_last_alerted = {}
 
 async def send(msg):
     await bot.send_message(chat_id=CHAT_ID, text=msg)
 
 def get_recent_mints(slug, since_timestamp):
-    """
-    Use OpenSea collection events endpoint with event_type=mint
-    This is the correct endpoint for tracking mints by collection slug
-    """
     url = f"https://api.opensea.io/api/v2/events/collection/{slug}"
     headers = {"x-api-key": OPENSEA_API_KEY}
     params = {
@@ -38,7 +35,11 @@ def get_recent_mints(slug, since_timestamp):
 
 def check_mints():
     print("[Mint] Checking for new mints...")
-    for col in COLLECTIONS:
+
+    # Merge static config collections with dynamic watchlist
+    all_collections = merge_with_config(COLLECTIONS)
+
+    for col in all_collections:
         contract = col["contract"]
         slug = col["slug"]
         try:
@@ -49,22 +50,18 @@ def check_mints():
             mints = get_recent_mints(slug, since)
 
             if mints:
-                latest_ts = max(
-                    m.get("event_timestamp", since) for m in mints
-                )
+                latest_ts = max(m.get("event_timestamp", since) for m in mints)
                 last_seen[contract] = latest_ts
 
                 for mint in mints:
-                    # ── COOLDOWN CHECK ──────────────────────────────
                     now = datetime.now(timezone.utc).timestamp()
                     last = mint_last_alerted.get(contract, 0)
 
                     if (now - last) < MINT_COOLDOWN_MINUTES * 60:
-                        print(f"[Mint] Cooldown active for {col['name']}, skipping alert")
+                        print(f"[Mint] Cooldown active for {col['name']}, skipping")
                         continue
 
                     mint_last_alerted[contract] = now
-                    # ────────────────────────────────────────────────
 
                     nft = mint.get("nft", {})
                     token_id = nft.get("identifier", "?")
