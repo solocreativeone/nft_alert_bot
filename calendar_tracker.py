@@ -1,144 +1,129 @@
 import requests
 import asyncio
-import xml.etree.ElementTree as ET
+import re
+from datetime import datetime, timezone
 from telegram import Bot
 
 # Fallback import — private config takes priority
 try:
-    from private.config_live import TELEGRAM_TOKEN, CHAT_ID
+    from private.config_live import TELEGRAM_TOKEN, CHAT_ID, OPENSEA_API_KEY
 except ImportError:
-    from config import TELEGRAM_TOKEN, CHAT_ID
+    from config import TELEGRAM_TOKEN, CHAT_ID, OPENSEA_API_KEY
 
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# Track drops we've already alerted on
+# Track slugs we've already alerted on — slug is unique, prevents duplicates
 alerted_drops = set()
 
-# RSS feed URLs
-RSS_FEEDS = [
-    {
-        "name": "NFTCalendar",
-        "url": "https://nftcalendar.io/feed/",
-    },
-    {
-        "name": "NFT Evening",
-        "url": "https://nftevening.com/feed/",
-    },
-]
+# Junk filters — skip collections that match these
+JUNK_NAMES = ["test", "miant", "spam", "airdrop", "fake", "scam"]
+MIN_NAME_LENGTH = 3  # skip names that are too short
 
-# Must have at least one of these to be considered a drop
-DROP_KEYWORDS = [
-    "free mint", "public mint", "whitelist mint", "nft drop",
-    "minting now", "mint date", "mint price", "presale",
-    "allowlist", "nft launch", "collection drop", "mint opens",
-    "upcoming mint", "nft release"
-]
+async def send(msg):
+    await bot.send_message(chat_id=CHAT_ID, text=msg)
 
-# Always skip if any of these appear
-NEWS_KEYWORDS = [
-    "weekly drop", "price drop", "drops since", "token airdrop",
-    "hack", "stolen", "lawsuit", "validator", "stablecoin",
-    "prediction", "analysis", "report", "regulation", "sec",
-    "joins", "partnership", "raises", "funding", "etf",
-    "plunges", "rallying", "outperform", "collapse", "airdrop",
-    "hodler", "binance", "coinbase", "blackrock", "bybit"
-]
-
-def parse_rss(feed_url):
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; NFTAlertBot/1.0)"}
-    res = requests.get(feed_url, headers=headers, timeout=15)
+def get_opensea_drops():
+    headers = {"x-api-key": OPENSEA_API_KEY}
+    url = "https://api.opensea.io/api/v2/collections"
+    params = {
+        "chain": "ethereum",
+        "order_by": "created_date",
+        "limit": 25,
+    }
+    res = requests.get(url, headers=headers, params=params, timeout=15)
     res.raise_for_status()
+    return res.json().get("collections", [])
 
-    root = ET.fromstring(res.content)
-    channel = root.find("channel")
-    if not channel:
-        return []
+def is_junk(name, slug):
+    """Filter out test collections, unnamed contracts, and spam."""
+    # Skip if name looks like a contract address
+    if name.startswith("0x") and len(name) > 10:
+        return True
+    # Skip if name is too short
+    if len(name.strip()) < MIN_NAME_LENGTH:
+        return True
+    # Skip if name contains junk keywords
+    name_lower = name.lower()
+    if any(kw in name_lower for kw in JUNK_NAMES):
+        return True
+    return False
 
-    items = []
-    for item in channel.findall("item"):
-        title = item.findtext("title", "").strip()
-        link = item.findtext("link", "").strip()
-        pub_date = item.findtext("pubDate", "").strip()
-        description = item.findtext("description", "").strip()
-
-        if title and link:
-            items.append({
-                "title": title,
-                "link": link,
-                "date": pub_date,
-                "description": description[:200] if description else "",
-            })
-
-    return items
-
-def is_drop_announcement(item):
-    """Return True only for actual drop/mint announcements."""
-    text = (item["title"] + " " + item["description"]).lower()
-
-    # Skip news articles first
-    if any(kw in text for kw in NEWS_KEYWORDS):
+def is_within_age(created, max_hours=72):
+    """Return True if collection was created within max_hours."""
+    if not created:
         return False
-
-    # Must contain a strong drop keyword
-    if not any(kw in text for kw in DROP_KEYWORDS):
+    try:
+        created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+        age_hours = (datetime.now(timezone.utc) - created_dt).total_seconds() / 3600
+        return age_hours <= max_hours
+    except Exception:
         return False
-
-    # Skip Solana-only or Bitcoin-only drops
-    other_chains = ["solana", "polygon", "bitcoin ordinal"]
-    eth_keywords = ["ethereum", "eth ", "erc-721", "erc721", "mainnet"]
-    is_other_only = any(kw in text for kw in other_chains) and not any(kw in text for kw in eth_keywords)
-
-    return not is_other_only
 
 def check_calendar():
-    print("[Calendar] Checking RSS feeds for upcoming NFT drops...")
-    total_alerted = 0
+    print("[Calendar] Checking OpenSea for new collection launches...")
     messages_to_send = []
+    total_alerted = 0
 
-    for feed in RSS_FEEDS:
-        try:
-            items = parse_rss(feed["url"])
-            print(f"[Calendar] {feed['name']}: {len(items)} items — filtering...")
+    try:
+        collections = get_opensea_drops()
+        print(f"[Calendar] OpenSea: {len(collections)} collections returned")
 
-            for item in items:
-                drop_key = item["link"]
+        for col in collections:
+            slug = col.get("collection", "")
+            name = col.get("name", slug)
+            created = col.get("created_date", "")
 
-                if drop_key in alerted_drops:
-                    continue
+            # Use slug as unique key — prevents duplicates
+            drop_key = slug
+            if not slug or drop_key in alerted_drops:
+                continue
 
-                if not is_drop_announcement(item):
-                    continue
+            # Skip old collections
+            if not is_within_age(created, max_hours=72):
+                continue
 
-                alerted_drops.add(drop_key)
-                total_alerted += 1
+            # Skip junk
+            if is_junk(name, slug):
+                print(f"[Calendar] Skipping junk: {name}")
+                continue
 
-                messages_to_send.append(
-                    f"📅 Upcoming NFT Drop!\n"
-                    f"Name: {item['title']}\n"
-                    f"Date: {item['date']}\n"
-                    f"Source: {feed['name']}\n"
-                    f"🔗 {item['link']}"
-                )
-                print(f"[Calendar] 📅 Queued: {item['title']}")
+            supply = col.get("total_supply", "?")
+            description = col.get("description", "")
+            clean_desc = re.sub(r"<[^>]+>", "", description).strip()[:120] if description else ""
 
-        except Exception as e:
-            print(f"[Calendar Error] {feed['name']}: {e}")
+            alerted_drops.add(drop_key)
+            total_alerted += 1
 
-    # Send all messages in one async batch
+            msg = (
+                f"🆕 New Collection on OpenSea!\n"
+                f"Name: {name}\n"
+                f"Supply: {supply}\n"
+            )
+            if clean_desc:
+                msg += f"About: {clean_desc}\n"
+            msg += f"🔗 https://opensea.io/collection/{slug}"
+
+            messages_to_send.append(msg)
+            print(f"[Calendar] 🆕 Queued: {name}")
+
+    except Exception as e:
+        print(f"[Calendar Error] OpenSea: {e}")
+
+    # Send all messages
     if messages_to_send:
         async def send_all():
             for msg in messages_to_send:
                 try:
                     await bot.send_message(chat_id=CHAT_ID, text=msg)
                 except Exception as e:
-                    print(f"[Calendar] Failed to send message: {e}")
+                    print(f"[Calendar] Failed to send: {e}")
 
         try:
             asyncio.run(send_all())
         except Exception as e:
-            print(f"[Calendar] Telegram send error: {e}")
+            print(f"[Calendar] Telegram error: {e}")
 
     if total_alerted == 0:
-        print("[Calendar] No new drop announcements found")
+        print("[Calendar] No new drops to alert on")
     else:
-        print(f"[Calendar] ✅ Sent {total_alerted} drop alert(s)")
+        print(f"[Calendar] ✅ Sent {total_alerted} alert(s)")
