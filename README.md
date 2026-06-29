@@ -1,7 +1,7 @@
 # 🤖 NFT Alert Bot
 
 A lightweight Ethereum NFT bot and **on-chain event crawler** that tracks
-**floor price movements**, **new mints**, **new collection drops**, and **upcoming launches** —
+**floor price movements**, **new mints**, **new collection drops**, and **upcoming launches** -
 and sends real-time alerts straight to your Telegram.
 
 No webhooks. No complex infrastructure. One service. Runs forever on Railway's free tier.
@@ -10,13 +10,13 @@ No webhooks. No complex infrastructure. One service. Runs forever on Railway's f
 
 ## Features
 
-- 📅 **Pre-Mint Calendar** — monitors OpenSea for newly launched collections and alerts you before they sell out
-- 🆕 **New Drop Alerts** — blockchain event listener that detects brand new ERC-721/1155 collections the moment they start minting on Ethereum
-- 🚨 **Floor Drop Alerts** — get notified when a collection's floor falls below your target
-- 🚀 **Floor Pump Alerts** — get notified when a collection's floor rises above your target
-- 🟢 **Mint Tracker** — detects new mints in real-time by polling on-chain transfer events
-- 📬 **Telegram delivery** — all alerts go straight to your Telegram DM
-- ☁️ **Railway-ready** — deploys as a background worker, runs 24/7 for free
+- 📅 **Pre-Mint Calendar** - monitors OpenSea for newly launched collections and alerts you before they sell out
+- 🆕 **New Drop Alerts** - blockchain event listener that detects brand new ERC-721/1155 collections the moment they start minting on Ethereum
+- 🚨 **Floor Drop Alerts** - get notified when a collection's floor falls below your target
+- 🚀 **Floor Pump Alerts** - get notified when a collection's floor rises above your target
+- 🟢 **Mint Tracker** - detects new mints in real-time by polling on-chain transfer events
+- 📬 **Telegram delivery** - all alerts go straight to your Telegram DM
+- ☁️ **Railway-ready** - deploys as a background worker, runs 24/7 for free
 
 ---
 
@@ -25,7 +25,7 @@ No webhooks. No complex infrastructure. One service. Runs forever on Railway's f
 - Python 3.10+
 - A [Telegram bot token](https://t.me/BotFather)
 - An [OpenSea API key](https://opensea.io/developers) (free tier)
-- An [Alchemy API key](https://alchemy.com) (free tier) — for new drop detection
+- An [Alchemy API key](https://alchemy.com) (free tier) - for new drop detection
 
 ---
 
