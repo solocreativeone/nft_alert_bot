@@ -1,7 +1,7 @@
 # 🤖 NFT Alert Bot
 
-A lightweight Ethereum NFT bot and **on-chain event crawler** that tracks 
-**floor price movements**, **new mints**, and **new collection drops** -
+A lightweight Ethereum NFT bot and **on-chain event crawler** that tracks
+**floor price movements**, **new mints**, **new collection drops**, and **upcoming launches** —
 and sends real-time alerts straight to your Telegram.
 
 No webhooks. No complex infrastructure. One service. Runs forever on Railway's free tier.
@@ -10,14 +10,14 @@ No webhooks. No complex infrastructure. One service. Runs forever on Railway's f
 
 ## Features
 
-- 🆕 **New Drop Alerts** - blockchain event listener that detects brand new 
-    ERC-721/1155 collections the moment they start minting on Ethereum
-- 🚨 **Floor Drop Alerts** - get notified when a collection's floor falls below your target
-- 🚀 **Floor Pump Alerts** - get notified when a collection's floor rises above your target
-- 🟢 **Mint Tracker** - detects new mints in real-time by polling on-chain transfer events
-- 📬 **Telegram delivery** - all alerts go straight to your Telegram DM
-- ☁️ **Railway-ready** - deploys as a background worker, runs 24/7 for free
- 
+- 📅 **Pre-Mint Calendar** — monitors OpenSea for newly launched collections and alerts you before they sell out
+- 🆕 **New Drop Alerts** — blockchain event listener that detects brand new ERC-721/1155 collections the moment they start minting on Ethereum
+- 🚨 **Floor Drop Alerts** — get notified when a collection's floor falls below your target
+- 🚀 **Floor Pump Alerts** — get notified when a collection's floor rises above your target
+- 🟢 **Mint Tracker** — detects new mints in real-time by polling on-chain transfer events
+- 📬 **Telegram delivery** — all alerts go straight to your Telegram DM
+- ☁️ **Railway-ready** — deploys as a background worker, runs 24/7 for free
+
 ---
 
 ## Prerequisites
@@ -25,7 +25,7 @@ No webhooks. No complex infrastructure. One service. Runs forever on Railway's f
 - Python 3.10+
 - A [Telegram bot token](https://t.me/BotFather)
 - An [OpenSea API key](https://opensea.io/developers) (free tier)
-- An [Alchemy API key](https://alchemy.com) (free tier) - for new drop detection
+- An [Alchemy API key](https://alchemy.com) (free tier) — for new drop detection
 
 ---
 
@@ -58,7 +58,7 @@ Sign up at [opensea.io/developers](https://opensea.io/developers) and copy your 
 
 ### 5. Configure your collections
 
-Edit `config.py`:
+Copy `config.example.py` to `private/config_live.py` and fill in your real values for local development:
 
 ```python
 COLLECTIONS = [
@@ -71,6 +71,8 @@ COLLECTIONS = [
     },
 ]
 ```
+
+The `private/` folder is blocked by `.gitignore` and never pushed to GitHub.
 
 ### 6. Set environment variables
 
@@ -89,7 +91,7 @@ Or export them directly:
 export TELEGRAM_TOKEN=...
 export CHAT_ID=...
 export OPENSEA_API_KEY=...
-export ALCHEMY_API_KEY=your_alchemy_key
+export ALCHEMY_API_KEY=...
 ```
 
 ### 7. Run locally
@@ -111,6 +113,17 @@ python bot.py
    - `OPENSEA_API_KEY`
    - `ALCHEMY_API_KEY`
 
+**Optional** — override default poll intervals via Railway Variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `FLOOR_CHECK_INTERVAL` | `5` | Floor price check frequency (minutes) |
+| `MINT_CHECK_INTERVAL` | `1` | Mint tracker frequency (minutes) |
+| `DROPS_CHECK_INTERVAL` | `1` | New drop detection frequency (minutes) |
+| `MINT_COOLDOWN_MINUTES` | `10` | Min gap between mint alerts per collection |
+| `MIN_MINTS_THRESHOLD` | `5` | Min mints before alerting on a new drop |
+| `FLOOR_COOLDOWN_MINUTES` | `30` | Min gap between floor alerts per collection |
+
 5. Railway auto-detects `railway.toml` and deploys automatically
 
 Railway will keep the bot running 24/7. Monitor logs under the **Deployments** tab.
@@ -121,12 +134,14 @@ Railway will keep the bot running 24/7. Monitor logs under the **Deployments** t
 
 ```
 nft-alert-bot/
-├── drops.py         # New drop detector via Alchemy
-├── bot.py           # Entry point - schedules and runs everything
-├── floor.py         # Floor price checker and alert logic
-├── mint.py          # Mint tracker via polling
-├── config.py        # Collections config and env var loading
-├── railway.toml     # Railway deployment config
+├── bot.py                # Entry point — schedules and runs everything
+├── floor.py              # Floor price checker and alert logic
+├── mint.py               # Mint tracker via polling
+├── drops.py              # New drop detector via Alchemy
+├── calendar_tracker.py   # Pre-mint calendar via OpenSea API
+├── config.py             # Collections config and env var loading
+├── config.example.py     # Sample config for contributors
+├── railway.toml          # Railway deployment config
 ├── requirements.txt
 └── .gitignore
 ```
@@ -135,6 +150,7 @@ nft-alert-bot/
 
 ## Roadmap
 
+- [x] Pre-mint calendar alerts
 - [ ] Multi-chain support (Solana, Base)
 - [ ] Discord alerts
 - [ ] Web dashboard
