@@ -8,7 +8,40 @@ try:
 except ImportError:
     from config import TELEGRAM_TOKEN, CHAT_ID
 
-# Command Handlers 
+# ── Command Handlers ───────────────────────────────────────────────
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.effective_chat.id) != str(CHAT_ID):
+        return
+
+    await update.message.reply_text(
+        "🤖 NFTpulse is live!\n\n"
+        "I track floor prices, mints, new drops, and live OpenSea mints — "
+        "and send alerts straight here.\n\n"
+        "Quick commands:\n"
+        "/watch 0xContract — add a collection\n"
+        "/unwatch 0xContract — remove a collection\n"
+        "/list — show watchlist\n"
+        "/live — check live & upcoming mints now\n"
+        "/help — show all commands"
+    )
+
+async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /live
+    Manually triggers a live & upcoming mints check right now.
+    """
+    if str(update.effective_chat.id) != str(CHAT_ID):
+        return
+
+    await update.message.reply_text("🔍 Checking OpenSea Live & Upcoming Mints...")
+
+    try:
+        from live_drops import check_live_drops
+        check_live_drops()
+        await update.message.reply_text("✅ Live mints check complete — see results above.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error checking live mints: {e}")
 
 async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_chat.id) != str(CHAT_ID):
@@ -90,18 +123,23 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "🤖 NFTpulse Bot Commands\n\n"
-        "/watch 0xContract - add a collection to watchlist\n"
-        "/unwatch 0xContract - remove a collection\n"
-        "/list - show all watched collections\n"
-        "/help - show this message"
+        "/start — restart / welcome message\n"
+        "/watch 0xContract — add a collection to watchlist\n"
+        "/unwatch 0xContract — remove a collection\n"
+        "/list — show all watched collections\n"
+        "/live — check live & upcoming mints now\n"
+        "/help — show this message"
     )
 
-# App Builder
+# ── App Builder ────────────────────────────────────────────────────
+
 def build_app():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("watch", watch_command))
     app.add_handler(CommandHandler("unwatch", unwatch_command))
     app.add_handler(CommandHandler("list", list_command))
+    app.add_handler(CommandHandler("live", live_command))
     app.add_handler(CommandHandler("help", help_command))
     return app
 
@@ -112,7 +150,7 @@ async def start_polling():
     await app.updater.start_polling(allowed_updates=["message"])
     await app.start()
     print("[Commands] ✅ Telegram command listener started")
-    print("[Commands]    /watch  /unwatch  /list  /help")
+    print("[Commands]    /start  /watch  /unwatch  /list  /live  /help")
     # Keep running forever
     await asyncio.Event().wait()
 
