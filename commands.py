@@ -123,12 +123,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "🤖 NFTpulse Bot Commands\n\n"
-        "/start — restart / welcome message\n"
-        "/watch 0xContract — add a collection to watchlist\n"
-        "/unwatch 0xContract — remove a collection\n"
-        "/list — show all watched collections\n"
-        "/live — check live & upcoming mints now\n"
-        "/help — show this message"
+        "/start - restart / welcome message\n"
+        "/watch 0xContract - add a collection to watchlist\n"
+        "/unwatch 0xContract - remove a collection\n"
+        "/list - show all watched collections\n"
+        "/live - check live & upcoming mints now\n"
+        "/help - show this message"
     )
 
 # ── App Builder ────────────────────────────────────────────────────
@@ -144,7 +144,7 @@ def build_app():
     return app
 
 async def start_polling():
-    """Start polling without signal handlers — safe for background threads."""
+    """Start polling without signal handlers - safe for background threads."""
     app = build_app()
     await app.initialize()
     await app.updater.start_polling(allowed_updates=["message"])
