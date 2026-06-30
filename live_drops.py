@@ -62,6 +62,40 @@ def get_collection_details(slug):
         "total_supply": data.get("total_supply", "?"),
     }
 
+def get_live_drops_summary():
+    """
+    Returns a formatted summary of ALL current live/upcoming mints,
+    regardless of whether they were already alerted before.
+    Used by the /live Telegram command for on-demand checks.
+    """
+    try:
+        slugs = get_live_upcoming_mints()
+        if not slugs:
+            return "No live or upcoming mints found on OpenSea right now."
+
+        lines = ["🔥 Live & Upcoming Mints on OpenSea:\n"]
+        count = 0
+
+        for slug in slugs:
+            details = get_collection_details(slug)
+            if not details:
+                continue
+
+            count += 1
+            lines.append(
+                f"{count}. {details['name']}\n"
+                f"   Supply: {details['total_supply']}\n"
+                f"   🔗 https://opensea.io/collection/{slug}\n"
+            )
+
+        if count == 0:
+            return "Found listings but couldn't fetch details — try again shortly."
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"❌ Error fetching live mints: {e}"
+
 def check_live_drops():
     print("[LiveDrops] Checking OpenSea Live & Upcoming Mints...")
     messages_to_send = []

@@ -8,28 +8,27 @@ try:
 except ImportError:
     from config import TELEGRAM_TOKEN, CHAT_ID
 
-# ── Command Handlers ───────────────────────────────────────────────
-
+# Command Handlers
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_chat.id) != str(CHAT_ID):
         return
 
     await update.message.reply_text(
         "🤖 NFTpulse is live!\n\n"
-        "I track floor prices, mints, new drops, and live OpenSea mints — "
+        "I track floor prices, mints, new drops, and live OpenSea mints - "
         "and send alerts straight here.\n\n"
         "Quick commands:\n"
-        "/watch 0xContract — add a collection\n"
-        "/unwatch 0xContract — remove a collection\n"
-        "/list — show watchlist\n"
-        "/live — check live & upcoming mints now\n"
-        "/help — show all commands"
+        "/watch 0xContract - add a collection\n"
+        "/unwatch 0xContract - remove a collection\n"
+        "/list - show watchlist\n"
+        "/live - check live & upcoming mints now\n"
+        "/help - show all commands"
     )
 
 async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /live
-    Manually triggers a live & upcoming mints check right now.
+    Fetches and displays the current Live & Upcoming Mints list from OpenSea.
     """
     if str(update.effective_chat.id) != str(CHAT_ID):
         return
@@ -37,9 +36,9 @@ async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 Checking OpenSea Live & Upcoming Mints...")
 
     try:
-        from live_drops import check_live_drops
-        check_live_drops()
-        await update.message.reply_text("✅ Live mints check complete — see results above.")
+        from live_drops import get_live_drops_summary
+        summary = get_live_drops_summary()
+        await update.message.reply_text(summary)
     except Exception as e:
         await update.message.reply_text(f"❌ Error checking live mints: {e}")
 
@@ -131,8 +130,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/help - show this message"
     )
 
-# ── App Builder ────────────────────────────────────────────────────
-
+# App Builder 
 def build_app():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
