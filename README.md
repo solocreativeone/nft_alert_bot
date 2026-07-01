@@ -11,11 +11,13 @@ No webhooks. No complex infrastructure. One service. Runs forever on Railway's f
 ## Features
 
 - 📅 **Pre-Mint Calendar** - monitors OpenSea for newly launched collections and alerts you before they sell out
+- 🔥 **Live & Upcoming Mints** - tracks OpenSea's curated live and upcoming mint list in real-time
 - 🆕 **New Drop Alerts** - blockchain event listener that detects brand new ERC-721/1155 collections the moment they start minting on Ethereum
 - 🚨 **Floor Drop Alerts** - get notified when a collection's floor falls below your target
 - 🚀 **Floor Pump Alerts** - get notified when a collection's floor rises above your target
 - 🟢 **Mint Tracker** - detects new mints in real-time by polling on-chain transfer events
 - 📬 **Telegram delivery** - all alerts go straight to your Telegram DM
+- 🤖 **Telegram commands** - manage your watchlist directly from Telegram
 - ☁️ **Railway-ready** - deploys as a background worker, runs 24/7 for free
 
 ---
@@ -34,8 +36,8 @@ No webhooks. No complex infrastructure. One service. Runs forever on Railway's f
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/solocreativeone/nft-alert-bot.git
-cd nft-alert-bot
+git clone https://github.com/solocreativeone/NFT_Alert_Bot.git
+cd NFT_Alert_Bot
 ```
 
 ### 2. Install dependencies
@@ -102,6 +104,33 @@ python bot.py
 
 ---
 
+## Telegram Commands
+
+Manage your watchlist directly from Telegram without editing any files:
+
+| Command | Description |
+|---|---|
+| `/start` | Welcome message and command overview |
+| `/watch 0xContract` | Add a collection to your watchlist |
+| `/unwatch 0xContract` | Remove a collection from your watchlist |
+| `/list` | Show all currently watched collections |
+| `/live` | Check live and upcoming mints on OpenSea right now |
+| `/help` | Show all available commands |
+
+**Example:**
+```
+/watch 0x6de7848a77e0910b29723dba879fcba3d8c07b67
+```
+Bot replies:
+```
+✅ Now watching: Cool I Guess Crew
+Current floor: 0.05 ETH
+🚨 Alert low: 0.04 ETH
+🚀 Alert high: 0.075 ETH
+```
+
+---
+
 ## Deploy to Railway
 
 1. Push this repo to GitHub
@@ -113,7 +142,7 @@ python bot.py
    - `OPENSEA_API_KEY`
    - `ALCHEMY_API_KEY`
 
-**Optional** — override default poll intervals via Railway Variables:
+**Optional** - override default poll intervals via Railway Variables:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -138,7 +167,10 @@ nft-alert-bot/
 ├── floor.py              # Floor price checker and alert logic
 ├── mint.py               # Mint tracker via polling
 ├── drops.py              # New drop detector via Alchemy
+├── live_drops.py         # Live & upcoming mints via OpenSea
 ├── calendar_tracker.py   # Pre-mint calendar via OpenSea API
+├── commands.py           # Telegram bot commands (/watch /unwatch /list /live)
+├── watchlist.py          # Persistent watchlist - saved to watchlist.json
 ├── config.py             # Collections config and env var loading
 ├── config.example.py     # Sample config for contributors
 ├── railway.toml          # Railway deployment config
@@ -151,6 +183,8 @@ nft-alert-bot/
 ## Roadmap
 
 - [x] Pre-mint calendar alerts
+- [x] Live & upcoming mints tracker
+- [x] Telegram commands for watchlist management
 - [ ] Multi-chain support (Solana, Base)
 - [ ] Discord alerts
 - [ ] Web dashboard
@@ -161,7 +195,7 @@ nft-alert-bot/
 
 ## License
 
-MIT - free to use, modify, and distribute.
+MIT — free to use, modify, and distribute.
 
 ---
 
