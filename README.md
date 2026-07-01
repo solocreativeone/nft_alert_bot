@@ -119,14 +119,14 @@ Manage your watchlist directly from Telegram without editing any files:
 
 **Example:**
 ```
-/watch 0x6de7848a77e0910b29723dba879fcba3d8c07b67
+/watch 0xbd3531da5cf5857e7cfaa92426877b022e612cf8
 ```
 Bot replies:
 ```
-✅ Now watching: Cool I Guess Crew
-Current floor: 0.05 ETH
-🚨 Alert low: 0.04 ETH
-🚀 Alert high: 0.075 ETH
+✅ Now watching: Pudgy Penguins
+Current floor: 4.456 ETH
+🚨 Alert low: 4.450 ETH
+🚀 Alert high: 4.50 ETH
 ```
 
 ---
@@ -195,7 +195,7 @@ nft-alert-bot/
 
 ## License
 
-MIT — free to use, modify, and distribute.
+MIT - free to use, modify, and distribute.
 
 ---
 
