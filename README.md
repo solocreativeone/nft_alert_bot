@@ -40,13 +40,22 @@ git clone https://github.com/solocreativeone/NFT_Alert_Bot.git
 cd NFT_Alert_Bot
 ```
 
-### 2. Install dependencies
+### 2. Create a virtual environment
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+```
+
+> Every time you return to work on the bot, activate the venv first.
+
+### 3. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Create your Telegram bot
+### 4. Create your Telegram bot
 
 1. Open Telegram → search **@BotFather**
 2. Send `/newbot` and follow the prompts
@@ -54,11 +63,11 @@ pip install -r requirements.txt
 4. Start a chat with your new bot
 5. Visit `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` to find your **chat ID**
 
-### 4. Get an OpenSea API key
+### 5. Get an OpenSea API key
 
 Sign up at [opensea.io/developers](https://opensea.io/developers) and copy your API key from the dashboard. No credit card required on the free tier.
 
-### 5. Configure your collections
+### 6. Configure your collections
 
 Copy `config.example.py` to `private/config_live.py` and fill in your real values for local development:
 
@@ -76,7 +85,9 @@ COLLECTIONS = [
 
 The `private/` folder is blocked by `.gitignore` and never pushed to GitHub.
 
-### 6. Set environment variables
+> **Security note:** `watchlist.json` and `.venv/` are also blocked by `.gitignore`. Never force-add them to git.
+
+### 7. Set environment variables
 
 Create a `.env` file locally (never commit this):
 
@@ -96,7 +107,7 @@ export OPENSEA_API_KEY=...
 export ALCHEMY_API_KEY=...
 ```
 
-### 7. Run locally
+### 8. Run locally
 
 ```bash
 python bot.py
@@ -174,6 +185,7 @@ nft-alert-bot/
 ├── config.py             # Collections config and env var loading
 ├── config.example.py     # Sample config for contributors
 ├── railway.toml          # Railway deployment config
+├── watchlist.json        # Auto-created at runtime — never commit this
 ├── requirements.txt
 └── .gitignore
 ```
