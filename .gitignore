@@ -4,7 +4,7 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
-
+.venv
 # Virtual environment
 venv/
 
@@ -12,4 +12,4 @@ venv/
 # Private config - never commit this
 private/
 
-watchlist.json
+watchlist.json.venv/
