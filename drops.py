@@ -3,8 +3,6 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 from telegram import Bot
 
-
-# Fallback import - private config takes priority
 try:
     from private.config_live import TELEGRAM_TOKEN, CHAT_ID, ALCHEMY_API_KEY, MIN_MINTS_THRESHOLD
     print("[Drops] ✅ Private config loaded")
@@ -12,21 +10,28 @@ except ImportError as e:
     print(f"[Drops] ❌ ImportError: {e}")
     from config import TELEGRAM_TOKEN, CHAT_ID, ALCHEMY_API_KEY, MIN_MINTS_THRESHOLD
 
-
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# Track contracts we've already alerted on to avoid duplicates
+# Track contracts we've already alerted on
 alerted_contracts = set()
 
 async def send(msg):
     await bot.send_message(chat_id=CHAT_ID, text=msg)
 
-def get_recent_transfers(from_block):
-    """
-    Fetch recent Transfer events from the zero address (mints)
-    across ALL contracts on Ethereum using Alchemy.
-    """
+def alchemy_post(payload):
+    """Central Alchemy request handler with rate limit and error handling."""
     url = f"https://eth-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
+    res = requests.post(url, json=payload, timeout=15)
+
+    if res.status_code == 429:
+        print("[Drops] Rate limited by Alchemy — backing off 30 seconds")
+        import time; time.sleep(30)
+        return None
+
+    res.raise_for_status()
+    return res.json()
+
+def get_recent_transfers(from_block):
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -37,32 +42,27 @@ def get_recent_transfers(from_block):
             "fromAddress": "0x0000000000000000000000000000000000000000",
             "category": ["erc721", "erc1155"],
             "withMetadata": True,
-            "maxCount": "0x32"  # 50 results max
+            "maxCount": "0x32"
         }]
     }
-    res = requests.post(url, json=payload, timeout=15)
-    res.raise_for_status()
-    return res.json().get("result", {}).get("transfers", [])
+    data = alchemy_post(payload)
+    if not data:
+        return []
+    return data.get("result", {}).get("transfers", [])
 
 def get_current_block():
-    """Get the latest Ethereum block number."""
-    url = f"https://eth-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "eth_blockNumber",
         "params": []
     }
-    res = requests.post(url, json=payload, timeout=10)
-    res.raise_for_status()
-    return int(res.json()["result"], 16)
+    data = alchemy_post(payload)
+    if not data:
+        return None
+    return int(data["result"], 16)
 
 def get_contract_age_hours(contract_address):
-    """
-    Check how old a contract is by finding its first transaction.
-    Returns age in hours — we only alert on contracts < 24 hours old.
-    """
-    url = f"https://eth-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -76,22 +76,26 @@ def get_contract_age_hours(contract_address):
             "maxCount": "0x1"
         }]
     }
-    res = requests.post(url, json=payload, timeout=10)
-    data = res.json().get("result", {}).get("transfers", [])
-    if not data:
-        return 999  # Unknown — skip it
+    try:
+        data = alchemy_post(payload)
+        if not data:
+            return 999
+        transfers = data.get("result", {}).get("transfers", [])
+        if not transfers:
+            return 999
 
-    first_tx_time = data[0].get("metadata", {}).get("blockTimestamp", "")
-    if not first_tx_time:
+        first_tx_time = transfers[0].get("metadata", {}).get("blockTimestamp", "")
+        if not first_tx_time:
+            return 999
+
+        first_dt = datetime.fromisoformat(first_tx_time.replace("Z", "+00:00"))
+        age_hours = (datetime.now(timezone.utc) - first_dt).total_seconds() / 3600
+        return round(age_hours, 1)
+    except Exception as e:
+        print(f"[Drops] Age lookup failed for {contract_address[:10]}...: {e}")
         return 999
 
-    first_dt = datetime.fromisoformat(first_tx_time.replace("Z", "+00:00"))
-    age_hours = (datetime.now(timezone.utc) - first_dt).total_seconds() / 3600
-    return round(age_hours, 1)
-
 def get_mint_count(contract_address):
-    """Count total mints for a contract so far."""
-    url = f"https://eth-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -102,16 +106,19 @@ def get_mint_count(contract_address):
             "fromAddress": "0x0000000000000000000000000000000000000000",
             "toAddress": contract_address,
             "category": ["erc721", "erc1155"],
-            "maxCount": "0x64"  # 100 max
+            "maxCount": "0x64"
         }]
     }
-    res = requests.post(url, json=payload, timeout=10)
-    transfers = res.json().get("result", {}).get("transfers", [])
-    return len(transfers)
+    try:
+        data = alchemy_post(payload)
+        if not data:
+            return 0
+        return len(data.get("result", {}).get("transfers", []))
+    except Exception as e:
+        print(f"[Drops] Mint count failed for {contract_address[:10]}...: {e}")
+        return 0
 
 def get_nft_standard(contract_address):
-    """Detect if contract is ERC-721 or ERC-1155."""
-    url = f"https://eth-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -124,11 +131,16 @@ def get_nft_standard(contract_address):
             "maxCount": "0x1"
         }]
     }
-    res = requests.post(url, json=payload, timeout=10)
-    transfers = res.json().get("result", {}).get("transfers", [])
-    if transfers:
-        category = transfers[0].get("category", "erc721")
-        return "ERC-1155" if category == "erc1155" else "ERC-721"
+    try:
+        data = alchemy_post(payload)
+        if not data:
+            return "ERC-721"
+        transfers = data.get("result", {}).get("transfers", [])
+        if transfers:
+            category = transfers[0].get("category", "erc721")
+            return "ERC-1155" if category == "erc1155" else "ERC-721"
+    except Exception as e:
+        print(f"[Drops] Standard detection failed: {e}")
     return "ERC-721"
 
 # Track the last block we checked
@@ -141,8 +153,10 @@ def check_drops():
 
     try:
         current_block = get_current_block()
+        if current_block is None:
+            print("[Drops] Could not get current block — skipping this cycle")
+            return
 
-        # On first run look back ~100 blocks (~20 mins)
         if last_checked_block is None:
             last_checked_block = current_block - 100
 
@@ -153,7 +167,6 @@ def check_drops():
             print("[Drops] No new mint activity detected")
             return
 
-        # Group transfers by contract address
         contracts = {}
         for tx in transfers:
             contract = tx.get("rawContract", {}).get("address", "").lower()
@@ -166,29 +179,21 @@ def check_drops():
         print(f"[Drops] Found mint activity on {len(contracts)} contract(s)")
 
         for contract, txs in contracts.items():
-
-            # Skip if we've already alerted on this contract
             if contract in alerted_contracts:
                 continue
 
-            # Check contract age — only alert on drops < 24 hours old
             age_hours = get_contract_age_hours(contract)
             if age_hours > 24:
                 print(f"[Drops] Skipping {contract[:10]}... — {age_hours}h old")
                 continue
 
-            # Check mint count — filter out test deploys
             mint_count = get_mint_count(contract)
             if mint_count < MIN_MINTS_THRESHOLD:
                 print(f"[Drops] Skipping {contract[:10]}... — only {mint_count} mints so far")
                 continue
 
-            # Detect standard
             standard = get_nft_standard(contract)
-
-            # Mark as alerted
             alerted_contracts.add(contract)
-
             short_contract = f"{contract[:6]}...{contract[-4:]}"
 
             asyncio.run(send(

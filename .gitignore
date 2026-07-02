@@ -8,5 +8,8 @@ __pycache__/
 # Virtual environment
 venv/
 
+
 # Private config - never commit this
 private/
+
+watchlist.json

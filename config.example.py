@@ -1,13 +1,14 @@
 import os
 
-
+# ─────────────────────────────────────────────
 # COPY THIS FILE TO private/config_live.py
 # Fill in your real values — never commit that file
+# ─────────────────────────────────────────────
 
-
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")   # From @BotFather
-CHAT_ID = os.environ.get("CHAT_ID")                 # Your Telegram chat ID
-OPENSEA_API_KEY = os.environ.get("OPENSEA_API_KEY") # From opensea.io/developers
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")    # From @BotFather
+CHAT_ID = os.environ.get("CHAT_ID")                  # Your Telegram chat ID
+OPENSEA_API_KEY = os.environ.get("OPENSEA_API_KEY")  # From opensea.io/developers
+ALCHEMY_API_KEY = os.environ.get("ALCHEMY_API_KEY")  # From alchemy.com
 
 # Collections to watch
 COLLECTIONS = [
@@ -25,25 +26,13 @@ COLLECTIONS = [
         "floor_alert_low": 5.0,
         "floor_alert_high": 15.0,
     },
-    
-    {
-        "name": "Signal Bound",
-        "slug": "signal-bound",
-        "contract": "0x3512ba948a032b00952cc6ba43bc013b4fcf7ebc",
-        "floor_alert_low": 0.05,
-        "floor_alert_high": 1.0,
-    },
-    
-    {
-        "name": "Cool I Guess Crew",
-        "slug": "cool-i-guess-crew",
-        "contract": "0x6de7848a77e0910b29723dba879fcba3d8c07b67",
-        "floor_alert_low": 0.01,
-        "floor_alert_high": 0.5,
-    },
     # Add more collections here...
 ]
 
 # How often to poll (in minutes)
 FLOOR_CHECK_INTERVAL = 5
 MINT_CHECK_INTERVAL = 1
+DROPS_CHECK_INTERVAL = 1
+MINT_COOLDOWN_MINUTES = 10
+MIN_MINTS_THRESHOLD = 5
+FLOOR_COOLDOWN_MINUTES = 30

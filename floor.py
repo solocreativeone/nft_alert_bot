@@ -1,10 +1,10 @@
 import requests
 import asyncio
+import time
 from datetime import datetime, timezone
 from telegram import Bot
 from watchlist import merge_with_config
 
-# Fallback import — private config takes priority
 try:
     from private.config_live import TELEGRAM_TOKEN, CHAT_ID, OPENSEA_API_KEY, COLLECTIONS, FLOOR_COOLDOWN_MINUTES
 except ImportError:
@@ -22,19 +22,29 @@ def get_floor(slug):
     url = f"https://api.opensea.io/api/v2/collections/{slug}/stats"
     headers = {"x-api-key": OPENSEA_API_KEY}
     res = requests.get(url, headers=headers, timeout=10)
+
+    # Handle rate limiting gracefully
+    if res.status_code == 429:
+        print(f"[Floor] Rate limited by OpenSea — backing off 60 seconds")
+        time.sleep(60)
+        return None
+
     res.raise_for_status()
     data = res.json()
-    return float(data["total"]["floor_price"])
+    # Round to 4 decimal places to avoid float precision noise
+    return round(float(data["total"]["floor_price"]), 4)
 
 def check_floors():
     print("[Floor] Running floor price check...")
 
-    # Merge static config collections with dynamic watchlist
     all_collections = merge_with_config(COLLECTIONS)
 
     for col in all_collections:
         try:
             floor = get_floor(col["slug"])
+            if floor is None:
+                continue  # Rate limited — skip this cycle
+
             print(f"[Floor] {col['name']}: {floor} ETH")
 
             now = datetime.now(timezone.utc).timestamp()

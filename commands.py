@@ -1,4 +1,5 @@
 import asyncio
+import re
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from watchlist import add_to_watchlist, remove_from_watchlist, get_watchlist
@@ -8,29 +9,29 @@ try:
 except ImportError:
     from config import TELEGRAM_TOKEN, CHAT_ID
 
-# Command Handlers
+# Valid Ethereum address pattern
+ETH_ADDRESS_PATTERN = re.compile(r'^0x[a-fA-F0-9]{40}$')
+
+# ── Command Handlers ───────────────────────────────────────────────
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_chat.id) != str(CHAT_ID):
+    if str(update.effective_chat.id) != str(CHAT_ID).strip():
         return
 
     await update.message.reply_text(
         "🤖 NFTpulse is live!\n\n"
-        "I track floor prices, mints, new drops, and live OpenSea mints - "
+        "I track floor prices, mints, new drops, and live OpenSea mints — "
         "and send alerts straight here.\n\n"
         "Quick commands:\n"
-        "/watch 0xContract - add a collection\n"
-        "/unwatch 0xContract - remove a collection\n"
-        "/list - show watchlist\n"
-        "/live - check live & upcoming mints now\n"
-        "/help - show all commands"
+        "/watch 0xContract — add a collection\n"
+        "/unwatch 0xContract — remove a collection\n"
+        "/list — show watchlist\n"
+        "/live — check live & upcoming mints now\n"
+        "/help — show all commands"
     )
 
 async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /live
-    Fetches and displays the current Live & Upcoming Mints list from OpenSea.
-    """
-    if str(update.effective_chat.id) != str(CHAT_ID):
+    if str(update.effective_chat.id) != str(CHAT_ID).strip():
         return
 
     await update.message.reply_text("🔍 Checking OpenSea Live & Upcoming Mints...")
@@ -43,7 +44,7 @@ async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error checking live mints: {e}")
 
 async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_chat.id) != str(CHAT_ID):
+    if str(update.effective_chat.id) != str(CHAT_ID).strip():
         return
 
     if not context.args:
@@ -55,8 +56,13 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     contract = context.args[0].strip()
 
-    if not contract.startswith("0x") or len(contract) < 10:
-        await update.message.reply_text("❌ Invalid contract address. Must start with 0x.")
+    # Strict Ethereum address validation — must be 0x + 40 hex chars
+    if not ETH_ADDRESS_PATTERN.match(contract):
+        await update.message.reply_text(
+            "❌ Invalid contract address.\n"
+            "Must be 0x followed by exactly 40 hex characters.\n"
+            "Example: 0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D"
+        )
         return
 
     await update.message.reply_text(f"🔍 Looking up {contract[:10]}... on OpenSea...")
@@ -78,7 +84,7 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def unwatch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_chat.id) != str(CHAT_ID):
+    if str(update.effective_chat.id) != str(CHAT_ID).strip():
         return
 
     if not context.args:
@@ -86,6 +92,11 @@ async def unwatch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     contract = context.args[0].strip()
+
+    if not ETH_ADDRESS_PATTERN.match(contract):
+        await update.message.reply_text("❌ Invalid contract address.")
+        return
+
     success, msg = remove_from_watchlist(contract)
 
     if success:
@@ -94,7 +105,7 @@ async def unwatch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ {msg}")
 
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_chat.id) != str(CHAT_ID):
+    if str(update.effective_chat.id) != str(CHAT_ID).strip():
         return
 
     watchlist = get_watchlist()
@@ -117,20 +128,21 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines))
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_chat.id) != str(CHAT_ID):
+    if str(update.effective_chat.id) != str(CHAT_ID).strip():
         return
 
     await update.message.reply_text(
         "🤖 NFTpulse Bot Commands\n\n"
-        "/start - restart / welcome message\n"
-        "/watch 0xContract - add a collection to watchlist\n"
-        "/unwatch 0xContract - remove a collection\n"
-        "/list - show all watched collections\n"
-        "/live - check live & upcoming mints now\n"
-        "/help - show this message"
+        "/start — welcome message\n"
+        "/watch 0xContract — add a collection to watchlist\n"
+        "/unwatch 0xContract — remove a collection\n"
+        "/list — show all watched collections\n"
+        "/live — check live & upcoming mints now\n"
+        "/help — show this message"
     )
 
-# App Builder 
+# ── App Builder ────────────────────────────────────────────────────
+
 def build_app():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
@@ -142,14 +154,13 @@ def build_app():
     return app
 
 async def start_polling():
-    """Start polling without signal handlers - safe for background threads."""
+    """Start polling without signal handlers — safe for background threads."""
     app = build_app()
     await app.initialize()
     await app.updater.start_polling(allowed_updates=["message"])
     await app.start()
     print("[Commands] ✅ Telegram command listener started")
     print("[Commands]    /start  /watch  /unwatch  /list  /live  /help")
-    # Keep running forever
     await asyncio.Event().wait()
 
 def run_command_listener():

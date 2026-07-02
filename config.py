@@ -5,7 +5,7 @@ CHAT_ID = os.environ.get("CHAT_ID")
 OPENSEA_API_KEY = os.environ.get("OPENSEA_API_KEY")
 ALCHEMY_API_KEY = os.environ.get("ALCHEMY_API_KEY")
 
-# Collections to watch - add as many as you like
+# Collections to watch — add as many as you like
 COLLECTIONS = [
     # Uncomment and fill in your collections
     # {
@@ -17,7 +17,6 @@ COLLECTIONS = [
     # },
 ]
 
-# How often to poll (in minutes)
 # How often to poll (in minutes) — override via Railway environment variables
 FLOOR_CHECK_INTERVAL = int(os.environ.get("FLOOR_CHECK_INTERVAL", 5))
 MINT_CHECK_INTERVAL = int(os.environ.get("MINT_CHECK_INTERVAL", 1))
