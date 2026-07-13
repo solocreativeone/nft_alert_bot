@@ -1,6 +1,7 @@
 import requests
 import asyncio
 import re
+from datetime import datetime, timezone
 from telegram import Bot
 
 try:
@@ -10,56 +11,87 @@ except ImportError:
 
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# Track slugs already alerted
+# Track slugs already alerted — resets daily
 alerted_live_drops = set()
+last_reset_date = None
 
-DROPS_URL = "https://opensea.io/drops/upcoming"
+DROPS_URL = "https://opensea.io/drops"
 
 async def send(msg):
     await bot.send_message(chat_id=CHAT_ID, text=msg)
 
+def reset_if_new_day():
+    """Clear the alerted set once per day so new alerts fire fresh each day."""
+    global alerted_live_drops, last_reset_date
+    today = datetime.now(timezone.utc).date()
+    if last_reset_date != today:
+        alerted_live_drops = set()
+        last_reset_date = today
+        print("[LiveDrops] Daily reset — cleared alerted drops cache")
+
 def get_live_upcoming_mints():
     """
-    Scrape OpenSea's curated Live & Upcoming Mints section.
-    NOTE: This relies on OpenSea's HTML structure which may change.
-    If alerts stop working, check if the page layout has been updated.
+    Scrape OpenSea's main drops page.
+    NOTE: Relies on OpenSea HTML structure — may break if they update their layout.
     """
     headers = {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
     }
     try:
         res = requests.get(DROPS_URL, headers=headers, timeout=15)
 
         if res.status_code == 403:
-            print("[LiveDrops] OpenSea blocked the scrape request — page structure may have changed")
-            return []
+            print("[LiveDrops] OpenSea blocked the request — trying alternate URL")
+            return get_live_mints_via_api()
 
         res.raise_for_status()
 
-        # Extract collection slugs from links like /collection/slug-name/overview
-        pattern = r'/collection/([a-z0-9\-]+)(?:/overview)?'
+        # Extract collection slugs from links
+        pattern = r'/collection/([a-z0-9\-]+)(?:/overview)?["\s]'
         matches = re.findall(pattern, res.text)
 
         # Deduplicate while preserving order
         seen = set()
         slugs = []
         for slug in matches:
-            if slug not in seen and len(slug) > 2:
+            if slug not in seen and len(slug) > 3:
                 seen.add(slug)
                 slugs.append(slug)
 
-        return slugs[:15]
+        return slugs[:20]
 
     except requests.exceptions.Timeout:
-        print("[LiveDrops] Request to OpenSea timed out")
+        print("[LiveDrops] Request timed out")
         return []
     except Exception as e:
         print(f"[LiveDrops] Error fetching drops page: {e}")
         return []
 
+def get_live_mints_via_api():
+    """
+    Fallback: use OpenSea API to find collections with recent activity.
+    Filters for collections with actual supply > 0.
+    """
+    headers = {"x-api-key": OPENSEA_API_KEY}
+    url = "https://api.opensea.io/api/v2/collections"
+    params = {
+        "chain": "ethereum",
+        "order_by": "created_date",
+        "limit": 25,
+    }
+    try:
+        res = requests.get(url, headers=headers, params=params, timeout=15)
+        res.raise_for_status()
+        collections = res.json().get("collections", [])
+        return [c.get("collection", "") for c in collections if c.get("total_supply", 0) > 0]
+    except Exception as e:
+        print(f"[LiveDrops] API fallback error: {e}")
+        return []
+
 def get_collection_details(slug):
-    """Fetch collection details from OpenSea API for a given slug."""
+    """Fetch collection details from OpenSea API."""
     headers = {"x-api-key": OPENSEA_API_KEY}
     url = f"https://api.opensea.io/api/v2/collections/{slug}"
 
@@ -73,11 +105,17 @@ def get_collection_details(slug):
             return None
 
         data = res.json()
+        supply = data.get("total_supply", 0)
+
+        # Skip collections with zero supply — they're shells/junk
+        if not supply or supply == 0:
+            return None
+
         return {
             "name": data.get("name", slug),
             "slug": slug,
             "description": (data.get("description") or "")[:120],
-            "total_supply": data.get("total_supply", "?"),
+            "total_supply": supply,
         }
     except Exception as e:
         print(f"[LiveDrops] Error fetching details for {slug}: {e}")
@@ -85,8 +123,8 @@ def get_collection_details(slug):
 
 def get_live_drops_summary():
     """
-    Returns a formatted summary of ALL current live/upcoming mints.
-    Used by the /live Telegram command for on-demand checks.
+    Returns a formatted summary of current live/upcoming mints.
+    Used by the /live Telegram command.
     """
     slugs = get_live_upcoming_mints()
     if not slugs:
@@ -107,6 +145,9 @@ def get_live_drops_summary():
             f"   🔗 https://opensea.io/collection/{slug}\n"
         )
 
+        if count >= 10:
+            break
+
     if count == 0:
         return "Found listings but couldn't fetch details — try again shortly."
 
@@ -114,11 +155,15 @@ def get_live_drops_summary():
 
 def check_live_drops():
     print("[LiveDrops] Checking OpenSea Live & Upcoming Mints...")
+
+    # Reset alerted set once per day
+    reset_if_new_day()
+
     messages_to_send = []
     total_alerted = 0
 
     slugs = get_live_upcoming_mints()
-    print(f"[LiveDrops] Found {len(slugs)} curated mints on OpenSea")
+    print(f"[LiveDrops] Found {len(slugs)} potential mints")
 
     for slug in slugs:
         if slug in alerted_live_drops:
