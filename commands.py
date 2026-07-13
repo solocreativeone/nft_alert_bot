@@ -12,7 +12,7 @@ except ImportError:
 # Valid Ethereum address pattern
 ETH_ADDRESS_PATTERN = re.compile(r'^0x[a-fA-F0-9]{40}$')
 
-# ── Command Handlers ───────────────────────────────────────────────
+# Command Handlers 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_chat.id) != str(CHAT_ID).strip():
@@ -20,7 +20,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "🤖 NFTpulse is live!\n\n"
-        "I track floor prices, mints, new drops, and live OpenSea mints — "
+        "I track floor prices, mints, new drops, and upcoming launches from NFTCalendar — "
         "and send alerts straight here.\n\n"
         "Quick commands:\n"
         "/watch 0xContract — add a collection\n"
@@ -34,7 +34,7 @@ async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_chat.id) != str(CHAT_ID).strip():
         return
 
-    await update.message.reply_text("🔍 Checking OpenSea Live & Upcoming Mints...")
+    await update.message.reply_text("🔍 Fetching upcoming Ethereum drops from NFTCalendar...")
 
     try:
         from live_drops import get_live_drops_summary
@@ -141,7 +141,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/help — show this message"
     )
 
-# ── App Builder ────────────────────────────────────────────────────
+# App Builder 
 
 def build_app():
     app = Application.builder().token(TELEGRAM_TOKEN).build()

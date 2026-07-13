@@ -15,24 +15,23 @@ bot = Bot(token=TELEGRAM_TOKEN)
 alerted_live_drops = set()
 last_reset_date = None
 
-LIVE_MINTS_URL = "https://nftcalendar.io/mints/"
+NFTCALENDAR_ETH_URL = "https://nftcalendar.io/b/ethereum/"
 
 async def send(msg):
     await bot.send_message(chat_id=CHAT_ID, text=msg)
 
 def reset_if_new_day():
-    """Clear alerted set once per day."""
     global alerted_live_drops, last_reset_date
     today = datetime.now(timezone.utc).date()
     if last_reset_date != today:
         alerted_live_drops = set()
         last_reset_date = today
-        print("[LiveDrops] Daily reset — cleared alerted drops cache")
+        print("[LiveDrops] Daily reset — cleared cache")
 
-def get_live_mints():
+def get_ethereum_drops():
     """
-    Scrape NFTCalendar's live mints page — real blockchain data,
-    not OpenSea HTML. Returns collections actively minting right now.
+    Scrape NFTCalendar's Ethereum drops page.
+    Returns list of dicts with name, date, description, link.
     """
     headers = {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -40,46 +39,51 @@ def get_live_mints():
         "Accept-Language": "en-US,en;q=0.9",
     }
     try:
-        res = requests.get(LIVE_MINTS_URL, headers=headers, timeout=15)
+        res = requests.get(NFTCALENDAR_ETH_URL, headers=headers, timeout=15)
 
         if res.status_code == 403:
-            print("[LiveDrops] NFTCalendar returned 403 — blocked")
+            print("[LiveDrops] NFTCalendar returned 403")
             return []
 
         res.raise_for_status()
         html = res.text
 
-        # Extract event links and names from the table
-        # Pattern: /event/slug/ followed by collection name
-        row_pattern = r'href="(https://nftcalendar\.io/event/([a-z0-9\-]+)/)"[^>]*>\s*([^\n<]+?)(?:\s+First minted on ([^\]]+))?\]'
-        rows = re.findall(row_pattern, html)
+        # Extract event links
+        event_pattern = r'href="(https://nftcalendar\.io/event/([a-z0-9\-]+)/)"'
+        event_matches = re.findall(event_pattern, html)
 
-        # Extract latest mint times
-        time_pattern = r'(\d{2}\s+\w{3}\s+202\d\s+\d{2}:\d{2}:\d{2})'
-        times = re.findall(time_pattern, html)
+        # Extract names from h2 tags
+        name_pattern = r'<h2[^>]*>\s*<a[^>]*>\s*([^<]+?)\s*</a>\s*</h2>'
+        names = re.findall(name_pattern, html)
 
-        # Extract minter counts and total mints
-        stats_pattern = r'(\d+)\s*\([\d.]+%\)\s*(\d+)'
-        stats = re.findall(stats_pattern, html)
+        # Extract dates
+        date_pattern = r'(\w{3}\s+\d{1,2},\s+202\d)'
+        dates = re.findall(date_pattern, html)
 
-        mints = []
-        for i, (link, slug, name_raw, first_minted) in enumerate(rows[:20]):
-            name = name_raw.strip()
-            last_mint = times[i] if i < len(times) else "Unknown"
-            unique_minters = stats[i][0] if i < len(stats) else "?"
-            total_mints = stats[i][1] if i < len(stats) else "?"
+        # Extract descriptions
+        desc_pattern = r'verified\s*([\w][^<\[]{30,200}?)\s*\[Read More\]|</a>\s*\n\n([\w][^<\[]{30,200}?)\s*\[Read More\]'
+        raw_descs = re.findall(desc_pattern, html)
+        descriptions = [d[0].strip() or d[1].strip() for d in raw_descs]
 
-            mints.append({
-                "name": name,
+        # Deduplicate links
+        seen = set()
+        unique = []
+        for link, slug in event_matches:
+            if slug not in seen:
+                seen.add(slug)
+                unique.append((link, slug))
+
+        drops = []
+        for i, (link, slug) in enumerate(unique[:20]):
+            drops.append({
+                "name": names[i].strip() if i < len(names) else slug,
                 "slug": slug,
                 "link": link,
-                "last_mint": last_mint,
-                "first_minted": first_minted.strip() if first_minted else "Unknown",
-                "unique_minters": unique_minters,
-                "total_mints": total_mints,
+                "date": dates[i * 2].strip() if i * 2 < len(dates) else "TBA",
+                "description": descriptions[i][:150] if i < len(descriptions) else "",
             })
 
-        return mints
+        return drops
 
     except requests.exceptions.Timeout:
         print("[LiveDrops] NFTCalendar request timed out")
@@ -90,53 +94,51 @@ def get_live_mints():
 
 def get_live_drops_summary():
     """
-    Returns formatted summary of currently minting collections.
+    Returns formatted list of upcoming Ethereum drops.
     Used by /live Telegram command.
     """
-    mints = get_live_mints()
-    if not mints:
-        return "No live mints found on NFTCalendar right now."
+    drops = get_ethereum_drops()
+    if not drops:
+        return "❌ Could not fetch drops from NFTCalendar — try again shortly."
 
-    lines = ["🔥 Currently Minting — NFTCalendar Live Tracker:\n"]
-    for i, mint in enumerate(mints[:10], 1):
+    lines = ["🔥 Upcoming Ethereum NFT Drops (NFTCalendar):\n"]
+    for i, drop in enumerate(drops[:10], 1):
         lines.append(
-            f"{i}. {mint['name']}\n"
-            f"   Last mint: {mint['last_mint']}\n"
-            f"   Minters: {mint['unique_minters']} | Total mints: {mint['total_mints']}\n"
-            f"   🔗 {mint['link']}\n"
+            f"{i}. {drop['name']}\n"
+            f"   Date: {drop['date']}\n"
+            f"   🔗 {drop['link']}\n"
         )
 
     return "\n".join(lines)
 
 def check_live_drops():
-    print("[LiveDrops] Checking NFTCalendar live mints...")
+    print("[LiveDrops] Checking NFTCalendar Ethereum drops...")
     reset_if_new_day()
 
-    mints = get_live_mints()
-    print(f"[LiveDrops] Found {len(mints)} actively minting collections")
+    drops = get_ethereum_drops()
+    print(f"[LiveDrops] Found {len(drops)} Ethereum drops")
 
     messages_to_send = []
     total_alerted = 0
 
-    for mint in mints:
-        slug = mint["slug"]
-
-        if slug in alerted_live_drops:
+    for drop in drops:
+        if drop["slug"] in alerted_live_drops:
             continue
 
-        alerted_live_drops.add(slug)
+        alerted_live_drops.add(drop["slug"])
         total_alerted += 1
 
-        messages_to_send.append(
-            f"🔥 Live Mint Alert!\n"
-            f"Collection: {mint['name']}\n"
-            f"First minted: {mint['first_minted']}\n"
-            f"Last mint: {mint['last_mint']}\n"
-            f"Unique minters: {mint['unique_minters']}\n"
-            f"Total mints: {mint['total_mints']}\n"
-            f"🔗 {mint['link']}"
+        msg = (
+            f"🔥 Upcoming ETH Mint!\n"
+            f"Name: {drop['name']}\n"
+            f"Date: {drop['date']}\n"
         )
-        print(f"[LiveDrops] 🔥 Queued: {mint['name']} — {mint['total_mints']} mints")
+        if drop["description"]:
+            msg += f"About: {drop['description']}\n"
+        msg += f"🔗 {drop['link']}"
+
+        messages_to_send.append(msg)
+        print(f"[LiveDrops] 🔥 Queued: {drop['name']}")
 
     if messages_to_send:
         async def send_all():
@@ -145,13 +147,12 @@ def check_live_drops():
                     await bot.send_message(chat_id=CHAT_ID, text=msg)
                 except Exception as e:
                     print(f"[LiveDrops] Failed to send: {e}")
-
         try:
             asyncio.run(send_all())
         except Exception as e:
             print(f"[LiveDrops] Telegram error: {e}")
 
     if total_alerted == 0:
-        print("[LiveDrops] No new live mints to alert on")
+        print("[LiveDrops] No new drops to alert on")
     else:
         print(f"[LiveDrops] ✅ Sent {total_alerted} alert(s)")
