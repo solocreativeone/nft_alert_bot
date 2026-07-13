@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timezone
 from telegram import Bot
 
-# Fallback import — private config takes priority
+# Fallback import - private config takes priority
 try:
     from private.config_live import TELEGRAM_TOKEN, CHAT_ID, OPENSEA_API_KEY
 except ImportError:
@@ -12,7 +12,7 @@ except ImportError:
 
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# Track slugs we've already alerted on — slug is unique, prevents duplicates
+# Track slugs we've already alerted on - slug is unique, prevents duplicates
 alerted_drops = set()
 
 # Junk filters — skip collections that match these
@@ -73,7 +73,7 @@ def check_calendar():
             name = col.get("name", slug)
             created = col.get("created_date", "")
 
-            # Use slug as unique key — prevents duplicates
+            # Use slug as unique key - prevents duplicates
             drop_key = slug
             if not slug or drop_key in alerted_drops:
                 continue
