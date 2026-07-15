@@ -12,8 +12,12 @@ except ImportError as e:
 
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# Track contracts we've already alerted on
-alerted_contracts = set()
+from collections import deque
+
+# Track contracts we've already alerted on with bounded cache
+MAX_ALERTED_CONTRACTS = 10000
+alerted_contracts_set = set()
+alerted_contracts_deque = deque(maxlen=MAX_ALERTED_CONTRACTS)
 
 async def send(msg):
     await bot.send_message(chat_id=CHAT_ID, text=msg)
@@ -179,7 +183,7 @@ def check_drops():
         print(f"[Drops] Found mint activity on {len(contracts)} contract(s)")
 
         for contract, txs in contracts.items():
-            if contract in alerted_contracts:
+            if contract in alerted_contracts_set:
                 continue
 
             age_hours = get_contract_age_hours(contract)
@@ -193,7 +197,12 @@ def check_drops():
                 continue
 
             standard = get_nft_standard(contract)
-            alerted_contracts.add(contract)
+            # Add to bounded cache
+            if len(alerted_contracts_deque) == MAX_ALERTED_CONTRACTS:
+                oldest = alerted_contracts_deque.popleft()
+                alerted_contracts_set.remove(oldest)
+            alerted_contracts_set.add(contract)
+            alerted_contracts_deque.append(contract)
             short_contract = f"{contract[:6]}...{contract[-4:]}"
 
             asyncio.run(send(

@@ -80,5 +80,10 @@ def check_mints():
                 print(f"[Mint] No new mints for {col['name']}")
                 last_seen[contract] = datetime.now(timezone.utc).timestamp()
 
+        except requests.exceptions.RequestException as e:
+            print(f"[Mint Network Error] {col['name']}: {e}")
+        except (KeyError, ValueError, TypeError) as e:
+            print(f"[Mint Data Error] {col['name']}: {e}")
         except Exception as e:
-            print(f"[Mint Error] {col['name']}: {e}")
+            print(f"[Mint Unexpected Error] {col['name']}: {e}")
+            raise  # Re-raise critical unknown errors

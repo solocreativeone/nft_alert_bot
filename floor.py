@@ -72,5 +72,10 @@ def check_floors():
                 ))
                 floor_last_alerted[col["slug"]] = now
 
+        except requests.exceptions.RequestException as e:
+            print(f"[Floor Network Error] {col['name']}: {e}")
+        except (KeyError, ValueError, TypeError) as e:
+            print(f"[Floor Data Error] {col['name']}: {e}")
         except Exception as e:
-            print(f"[Floor Error] {col['name']}: {e}")
+            print(f"[Floor Unexpected Error] {col['name']}: {e}")
+            raise  # Re-raise critical unknown errors

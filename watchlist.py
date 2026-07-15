@@ -65,8 +65,8 @@ def lookup_contract(contract_address):
         "name": name,
         "slug": slug,
         "contract": contract_address.lower(),
-        "floor_alert_low": round(floor * 0.8, 4) if floor else 0.01,
-        "floor_alert_high": round(floor * 1.5, 4) if floor else 1.0,
+        "floor_alert_low": round(floor * 0.8, 4) if floor and floor > 0 else 0.01,
+        "floor_alert_high": round(floor * 1.5, 4) if floor and floor > 0 else 1.0,
         "current_floor": floor,
     }
 

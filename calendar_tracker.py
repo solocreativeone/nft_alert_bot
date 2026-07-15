@@ -12,8 +12,12 @@ except ImportError:
 
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# Track slugs we've already alerted on - slug is unique, prevents duplicates
-alerted_drops = set()
+from collections import deque
+
+# Track slugs we've already alerted on with bounded cache
+MAX_ALERTED_DROPS = 10000
+alerted_drops_set = set()
+alerted_drops_deque = deque(maxlen=MAX_ALERTED_DROPS)
 
 # Junk filters — skip collections that match these
 JUNK_NAMES = ["test", "miant", "spam", "airdrop", "fake", "scam"]
@@ -91,7 +95,12 @@ def check_calendar():
             description = col.get("description", "")
             clean_desc = re.sub(r"<[^>]+>", "", description).strip()[:120] if description else ""
 
-            alerted_drops.add(drop_key)
+            # Add to bounded cache
+            if len(alerted_drops_deque) == MAX_ALERTED_DROPS:
+                oldest = alerted_drops_deque.popleft()
+                alerted_drops_set.remove(oldest)
+            alerted_drops_set.add(drop_key)
+            alerted_drops_deque.append(drop_key)
             total_alerted += 1
 
             msg = (
