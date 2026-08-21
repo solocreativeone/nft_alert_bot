@@ -1,220 +1,752 @@
-import requests
 import asyncio
-from datetime import datetime, timezone, timedelta
-from telegram import Bot
+import time
+from collections import deque
+from datetime import datetime, timezone
+import requests
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+from notifier import asend, asend_photo, download_image_bytes, escape_html
+from gemini_filter import gemini_score_nft, is_worth_alerting, verdict_badge
+from deployer_cache import get_contract_creator, is_known_serial_rugger, record_deployer_result, get_deployer_stats
+from dex_liquidity import get_dex_liquidity
+from ethos import get_ethos_profile_async, format_telegram_ethos_badge
+from metadata_resolver import resolve_metadata_async
 
 try:
-    from private.config_live import TELEGRAM_TOKEN, CHAT_ID, ALCHEMY_API_KEY, MIN_MINTS_THRESHOLD
+    from private.config_live import ALCHEMY_API_KEY, MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE
     print("[Drops] ✅ Private config loaded")
 except ImportError as e:
     print(f"[Drops] ❌ ImportError: {e}")
-    from config import TELEGRAM_TOKEN, CHAT_ID, ALCHEMY_API_KEY, MIN_MINTS_THRESHOLD
-
-bot = Bot(token=TELEGRAM_TOKEN)
-
-from collections import deque
+    from config import ALCHEMY_API_KEY, MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE
 
 # Track contracts we've already alerted on with bounded cache
 MAX_ALERTED_CONTRACTS = 10000
 alerted_contracts_set = set()
 alerted_contracts_deque = deque(maxlen=MAX_ALERTED_CONTRACTS)
 
-async def send(msg):
-    await bot.send_message(chat_id=CHAT_ID, text=msg)
+# A single wallet minting at least this many tokens to itself is bot/self-mint
+# churn, not organic demand — skip before spending a Gemini call.
+SINGLE_MINTER_MAX_MINTS = 10
 
-def alchemy_post(payload):
-    """Central Alchemy request handler with rate limit and error handling."""
-    url = f"https://eth-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
-    res = requests.post(url, json=payload, timeout=15)
+# Standard ERC Topics
+ERC721_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+ERC1155_SINGLE_TOPIC  = "0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62"
+ERC1155_BATCH_TOPIC   = "0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb"
+ZERO_ADDRESS_TOPIC    = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
-    if res.status_code == 429:
-        print("[Drops] Rate limited by Alchemy — backing off 30 seconds")
-        import time; time.sleep(30)
-        return None
+# ── DeFi / Infrastructure Contract Blocklist ──────────────────────────────────
+# These are ERC-721 tokens that represent DeFi positions, withdrawal receipts,
+# LP tokens, domain registrations, etc. — NOT collectible NFT drops.
+DEFI_CONTRACT_BLOCKLIST = {
+    # ── Uniswap / DEX Position NFTs ──
+    "0xc36442b4a4522e871399cd717abdd847ab11fe88",  # Uniswap V3 Positions NFT-V1 (Ethereum)
+    "0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e",  # Uniswap v4 Positions NFT (Ethereum)
+    "0xc36442b4a4522e871399cd717abdd847ab11fe88",  # Uniswap V3 Positions (Polygon/Arb/Opt/Base)
+    "0x03a520b32c04bf3beef7beb72e583e96d2541188",  # Uniswap V3 Positions (Base variant)
+    "0x00d5bbd0fe14e2e25758a3e0d68cfe26eb2db638",  # Supernova Positions NFT-V1
+    "0x827922686190790b37229fd06084350e74485b72",  # Slipstream Position NFT v1 (Base)
+    "0xe1f8cd9a83d87b25b0e59790b6a054447cf8f8b3",  # Slipstream Position NFT v1 (Optimism)
+    # ── Liquid Staking / Withdrawal Receipts ──
+    "0x889edc2edab5f40e902b864ad4d7ade8e412f9b1",  # Lido: stETH Withdrawal NFT
+    "0x7d5706f6ef3f89b3951e23e557cdfbc3239d4e2c",  # Lido: Withdraw Request NFT
+    "0x8d6fd65050a59e33f44aeae0d6e1f009af65e0a4",  # Kiln Exit Queue
+    "0x4bc9fec04f6b81a7f5843f9e72df8c5d0a740544",  # Saturn Withdrawal Request
+    "0xf9b179b5f64dbb1b3362a35b1e39e5840b149973",  # Staked ADI
+    # ── Domain Name Registrars ──
+    "0x57f1887a8bf19b14fc0df6fd9b2acc9af147ea85",  # ENS: Base Registrar
+    "0x2a186450130de1e4a90bff6a3a1c8b24d0e75ede",  # ENS: Name Wrapper
+    "0x2a18745306aaaecc900e0983c21e8f6c6d53b5b4",  # Decentraland DCL Registrar
+    # ── Aave / Lending Receipt Tokens ──
+    "0x4d5f47fa6a74757f35c14fd3a6ef8e3c9bc514e8",  # Aave Ethereum aEthWETH
+    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",  # USDC (ERC-20, extra safety)
+    "0x6b175474e89094c44da98b954eedeac495271d0f",  # DAI (ERC-20, extra safety)
+    "0xdc035d45d973e3ec169d2276ddab16f1e407384f",  # USDS Stablecoin
+}
 
-    res.raise_for_status()
-    return res.json()
+# Name patterns that indicate DeFi infrastructure, NOT collectible NFTs
+DEFI_NAME_PATTERNS = [
+    "positions nft",       # Uniswap V3/V4, Supernova, Slipstream, etc.
+    "position nft",
+    "withdrawal nft",      # Lido, Kiln, Saturn, etc.
+    "withdraw request",
+    "exit queue",
+    "stablecoin",          # USDS, USDC clones
+    "wrapped ether",       # WETH impersonators
+    "wrapped avax",        # WAVAX
+    "wrapped collateral",
+    "volatilev2 amm",     # Aerodrome/Velodrome LP tokens
+    "stablev2 amm",
+    "concentratedliq",
+    "pancake lps",         # PancakeSwap LP tokens
+    "cake-lp",
+    "slipstream position",
+    "aave ethereum",       # Aave receipt tokens
+    "exactly usdc",        # Exactly Protocol
+    "covenant bond",       # DeFi bonds
+    "steakhouse usd",
+]
 
-def get_recent_transfers(from_block):
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "alchemy_getAssetTransfers",
-        "params": [{
-            "fromBlock": hex(from_block),
-            "toBlock": "latest",
-            "fromAddress": "0x0000000000000000000000000000000000000000",
-            "category": ["erc721", "erc1155"],
-            "withMetadata": True,
-            "maxCount": "0x32"
-        }]
-    }
-    data = alchemy_post(payload)
-    if not data:
-        return []
-    return data.get("result", {}).get("transfers", [])
+def _is_defi_or_infrastructure(contract: str, name: str) -> str | None:
+    """Return a skip reason if this contract is DeFi infrastructure, else None."""
+    if contract.lower() in DEFI_CONTRACT_BLOCKLIST:
+        return "known DeFi/infrastructure contract"
+    if name:
+        name_lower = name.lower()
+        for pattern in DEFI_NAME_PATTERNS:
+            if pattern in name_lower:
+                return f"DeFi/infrastructure name pattern: '{pattern}'"
+    return None
 
-def get_current_block():
+# Multi-Chain Universal EVM Configuration (Tested high-speed public RPCs + Fallbacks)
+EVM_CHAINS = {
+    "base": {
+        "rpcs": [
+            "https://mainnet.base.org",
+            "https://base.drpc.org",
+            "https://base.gateway.tenderly.co",
+        ],
+        "explorer": "https://basescan.org",
+        "opensea_chain": "base",
+        "block_step": 60,
+    },
+    "zora": {
+        "rpcs": [
+            "https://rpc.zora.energy",
+            "https://zora.drpc.org",
+        ],
+        "explorer": "https://explorer.zora.energy",
+        "opensea_chain": "zora",
+        "block_step": 60,
+    },
+    "ethereum": {
+        "rpcs": [
+            "https://gateway.tenderly.co/public/mainnet",
+            "https://eth.drpc.org",
+            "https://rpc.builder0x69.io",
+            "https://rpc.mevblocker.io",
+        ],
+        "explorer": "https://etherscan.io",
+        "opensea_chain": "ethereum",
+        "block_step": 30,
+    },
+    "polygon": {
+        "rpcs": [
+            "https://polygon.drpc.org",
+            "https://polygon.gateway.tenderly.co",
+        ],
+        "explorer": "https://polygonscan.com",
+        "opensea_chain": "matic",
+        "block_step": 50,
+    },
+    "arbitrum": {
+        "rpcs": [
+            "https://arb1.arbitrum.io/rpc",
+            "https://arbitrum.drpc.org",
+            "https://arbitrum.gateway.tenderly.co",
+        ],
+        "explorer": "https://arbiscan.io",
+        "opensea_chain": "arbitrum",
+        "block_step": 60,
+    },
+    "optimism": {
+        "rpcs": [
+            "https://mainnet.optimism.io",
+            "https://optimism.drpc.org",
+            "https://optimism.gateway.tenderly.co",
+        ],
+        "explorer": "https://optimistic.etherscan.io",
+        "opensea_chain": "optimism",
+        "block_step": 60,
+    },
+    "bsc": {
+        "rpcs": [
+            "https://bsc.rpc.blxrbdn.com",
+            "https://1rpc.io/bnb",
+            "https://bsc.drpc.org",
+        ],
+        "explorer": "https://bscscan.com",
+        "opensea_chain": "bsc",
+        "block_step": 20,
+    },
+    "avalanche": {
+        "rpcs": [
+            "https://api.avax.network/ext/bc/C/rpc",
+            "https://avalanche.drpc.org",
+            "https://avax.meowrpc.com",
+        ],
+        "explorer": "https://snowtrace.io",
+        "opensea_chain": "avalanche",
+        "block_step": 50,
+    },
+    "robinhood": {
+        "rpcs": [
+            "https://rpc.mainnet.chain.robinhood.com",
+        ],
+        "explorer": "https://robinhoodchain.blockscout.com",
+        "opensea_chain": None,
+        "block_step": 60,
+    },
+}
+
+ALL_SUPPORTED_CHAINS = list(EVM_CHAINS.keys())
+last_checked_blocks = {chain: None for chain in ALL_SUPPORTED_CHAINS}
+
+
+def direct_rpc_post(chain: str, payload: dict):
+    """
+    Direct JSON-RPC handler with automatic RPC failover and retry logic.
+    """
+    chain_config = EVM_CHAINS.get(chain)
+    if not chain_config:
+        raise ValueError(f"[Drops] Unknown chain: {chain}")
+
+    rpcs = chain_config["rpcs"]
+    for rpc_url in rpcs:
+        if not rpc_url or "YOUR_KEY" in rpc_url:
+            continue
+        for attempt in range(2):
+            try:
+                res = requests.post(rpc_url, json=payload, timeout=8)
+                if res.status_code == 429:
+                    time.sleep(0.3 * (attempt + 1))
+                    continue
+                if res.status_code == 200:
+                    data = res.json()
+                    if "error" in data:
+                        break
+                    return data
+            except Exception:
+                continue
+
+    return None
+
+
+def rpc_post(chain: str, payload: dict):
+    """Unified RPC dispatcher for all EVM chains."""
+    return direct_rpc_post(chain, payload)
+
+
+async def get_current_block(chain: str):
+    """Fetch the latest block number for the specified chain."""
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "eth_blockNumber",
         "params": []
     }
-    data = alchemy_post(payload)
-    if not data:
+    data = await asyncio.to_thread(rpc_post, chain, payload)
+    if not data or "result" not in data:
         return None
-    return int(data["result"], 16)
+    try:
+        return int(data["result"], 16)
+    except Exception:
+        return None
 
-def get_contract_age_hours(contract_address):
-    payload = {
+
+def get_explorer_url(chain: str, contract: str) -> str:
+    """Return the correct block explorer contract URL."""
+    config = EVM_CHAINS.get(chain, {})
+    explorer = config.get("explorer", "https://etherscan.io")
+    return f"{explorer}/address/{contract}"
+
+
+def get_opensea_url(contract: str, chain: str = "ethereum") -> str:
+    """Return OpenSea URL if supported on this chain."""
+    config = EVM_CHAINS.get(chain, {})
+    os_chain = config.get("opensea_chain")
+    if os_chain:
+        return f"https://opensea.io/assets/{os_chain}/{contract}/1"
+    return f"https://opensea.io/assets/{chain}/{contract}/1"
+
+
+async def get_recent_transfers(chain: str, from_block: int):
+    """
+    Standard eth_getLogs for all chains detecting both ERC-721 and ERC-1155 mint events.
+    Detects:
+      - ERC-721:  Transfer(0x0, to, tokenId)
+      - ERC-1155: TransferSingle(operator, 0x0, to, id, value)
+    """
+    payload_721 = {
         "jsonrpc": "2.0",
         "id": 1,
-        "method": "alchemy_getAssetTransfers",
+        "method": "eth_getLogs",
         "params": [{
-            "fromBlock": "0x0",
+            "fromBlock": hex(from_block),
             "toBlock": "latest",
-            "toAddress": contract_address,
-            "category": ["erc721", "erc1155"],
-            "withMetadata": True,
-            "maxCount": "0x1"
+            "topics": [
+                ERC721_TRANSFER_TOPIC,
+                ZERO_ADDRESS_TOPIC,  # from == 0x0 (mint)
+            ]
         }]
     }
-    try:
-        data = alchemy_post(payload)
-        if not data:
-            return 999
-        transfers = data.get("result", {}).get("transfers", [])
-        if not transfers:
-            return 999
 
-        first_tx_time = transfers[0].get("metadata", {}).get("blockTimestamp", "")
-        if not first_tx_time:
-            return 999
-
-        first_dt = datetime.fromisoformat(first_tx_time.replace("Z", "+00:00"))
-        age_hours = (datetime.now(timezone.utc) - first_dt).total_seconds() / 3600
-        return round(age_hours, 1)
-    except Exception as e:
-        print(f"[Drops] Age lookup failed for {contract_address[:10]}...: {e}")
-        return 999
-
-def get_mint_count(contract_address):
-    payload = {
+    payload_1155 = {
         "jsonrpc": "2.0",
-        "id": 1,
-        "method": "alchemy_getAssetTransfers",
+        "id": 2,
+        "method": "eth_getLogs",
         "params": [{
-            "fromBlock": "0x0",
+            "fromBlock": hex(from_block),
             "toBlock": "latest",
-            "fromAddress": "0x0000000000000000000000000000000000000000",
-            "toAddress": contract_address,
-            "category": ["erc721", "erc1155"],
-            "maxCount": "0x64"
+            "topics": [
+                ERC1155_SINGLE_TOPIC,
+                None,
+                ZERO_ADDRESS_TOPIC,  # from == 0x0 (mint)
+            ]
         }]
     }
-    try:
-        data = alchemy_post(payload)
-        if not data:
-            return 0
-        return len(data.get("result", {}).get("transfers", []))
-    except Exception as e:
-        print(f"[Drops] Mint count failed for {contract_address[:10]}...: {e}")
-        return 0
 
-def get_nft_standard(contract_address):
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "alchemy_getAssetTransfers",
-        "params": [{
-            "fromBlock": "0x0",
-            "toBlock": "latest",
-            "fromAddress": "0x0000000000000000000000000000000000000000",
-            "category": ["erc721", "erc1155"],
-            "maxCount": "0x1"
-        }]
+    data_721 = await asyncio.to_thread(rpc_post, chain, payload_721)
+    data_1155 = await asyncio.to_thread(rpc_post, chain, payload_1155)
+
+    if data_721 is None and data_1155 is None:
+        return None
+
+    transfers = []
+    if data_721 and "result" in data_721 and isinstance(data_721["result"], list):
+        for log in data_721["result"]:
+            # ERC-721 Transfer MUST have 4 topics: [Transfer, from, to, tokenId]
+            # ERC-20 Transfer only has 3 topics: [Transfer, from, to]
+            if len(log.get("topics", [])) == 4:
+                transfers.append({
+                    "rawContract": {"address": log.get("address", "").lower()},
+                    "blockNumber": log.get("blockNumber"),
+                    "transactionHash": log.get("transactionHash"),
+                    "standard": "ERC-721",
+                })
+
+    if data_1155 and "result" in data_1155 and isinstance(data_1155["result"], list):
+        for log in data_1155["result"]:
+            # ERC-1155 TransferSingle has 4 topics: [TransferSingle, operator, from, to]
+            if len(log.get("topics", [])) >= 4:
+                transfers.append({
+                    "rawContract": {"address": log.get("address", "").lower()},
+                    "blockNumber": log.get("blockNumber"),
+                    "transactionHash": log.get("transactionHash"),
+                    "standard": "ERC-1155",
+                })
+
+    return transfers
+
+
+async def get_contract_data_batched(chain: str, contract_address: str, batch_txs: list = None):
+    """
+    RPC-safe contract inspection using bounded block ranges.
+
+    Uses a 1000-block lookback window instead of fromBlock: 0x0 to avoid
+    public RPC block-range limits. Falls back to batch_txs if targeted scan fails.
+    """
+    # ── Step 1: Get current block for bounded range ──────────────────
+    current_block = await get_current_block(chain)
+    lookback_blocks = 1000
+    from_block = max(0, current_block - lookback_blocks) if current_block else 0
+
+    mint_logs = []
+    standard = "ERC-721"
+    if batch_txs and batch_txs[0].get("standard") == "ERC-1155":
+        standard = "ERC-1155"
+
+    # ── Step 2: Bounded ERC-721 mint scan ────────────────────────────
+    if standard == "ERC-721":
+        payload = {
+            "jsonrpc": "2.0", "id": 1, "method": "eth_getLogs",
+            "params": [{
+                "fromBlock": hex(from_block), "toBlock": "latest",
+                "address": contract_address,
+                "topics": [ERC721_TRANSFER_TOPIC, ZERO_ADDRESS_TOPIC],
+            }]
+        }
+        try:
+            data = await asyncio.to_thread(rpc_post, chain, payload)
+            if data and data.get("result"):
+                mint_logs = [l for l in data["result"] if len(l.get("topics", [])) == 4]
+        except Exception:
+            mint_logs = []
+
+    # ── Step 3: Check ERC-1155 if no ERC-721 mints found ─────────────
+    if not mint_logs:
+        erc1155_payload = {
+            "jsonrpc": "2.0", "id": 2, "method": "eth_getLogs",
+            "params": [{
+                "fromBlock": hex(from_block),
+                "toBlock": "latest",
+                "address": contract_address,
+                "topics": [ERC1155_SINGLE_TOPIC, None, ZERO_ADDRESS_TOPIC],
+            }]
+        }
+        try:
+            erc1155_data = await asyncio.to_thread(rpc_post, chain, erc1155_payload)
+            if erc1155_data and erc1155_data.get("result"):
+                standard = "ERC-1155"
+                mint_logs = [l for l in erc1155_data["result"] if len(l.get("topics", [])) >= 4]
+        except Exception:
+            pass
+
+    mint_count = len(mint_logs)
+
+    # ── Step 4: Fallback to batch_txs if RPC scan returned nothing ───
+    if mint_count == 0 and batch_txs:
+        mint_count = len(batch_txs)
+
+    # ── Step 5: Unique minters from topic[2] (or topic[3] for 1155) ───
+    unique_minters = 0
+    if mint_logs:
+        topic_idx = 2 if standard == "ERC-721" else 3
+        unique_minters = len({
+            log["topics"][min(topic_idx, len(log.get("topics", [])) - 1)]
+            for log in mint_logs
+            if len(log.get("topics", [])) > 2
+        })
+    elif batch_txs:
+        unique_minters = len({
+            tx.get("transactionHash", "")
+            for tx in batch_txs
+            if tx.get("transactionHash")
+        })
+
+    # ── Step 6: Contract age from earliest mint block timestamp ──────
+    age_hours = 999
+    earliest_block_hex = None
+    if mint_logs:
+        earliest_block_hex = mint_logs[0].get("blockNumber")
+    elif batch_txs:
+        earliest_block_hex = batch_txs[0].get("blockNumber")
+
+    if earliest_block_hex:
+        block_payload = {
+            "jsonrpc": "2.0", "id": 3, "method": "eth_getBlockByNumber",
+            "params": [earliest_block_hex, False]
+        }
+        try:
+            block_data = await asyncio.to_thread(rpc_post, chain, block_payload)
+            if block_data and block_data.get("result"):
+                ts = int(block_data["result"].get("timestamp", "0x0"), 16)
+                age_hours = round((datetime.now(timezone.utc).timestamp() - ts) / 3600, 1)
+        except Exception:
+            pass
+
+    return {
+        "mint_count": mint_count,
+        "age_hours": age_hours,
+        "standard": standard,
+        "unique_minters": unique_minters,
     }
+
+
+def _decode_abi_string(hex_str: str) -> str:
+    """Safely decode an ABI-encoded string returned by eth_call."""
     try:
-        data = alchemy_post(payload)
-        if not data:
-            return "ERC-721"
-        transfers = data.get("result", {}).get("transfers", [])
-        if transfers:
-            category = transfers[0].get("category", "erc721")
-            return "ERC-1155" if category == "erc1155" else "ERC-721"
-    except Exception as e:
-        print(f"[Drops] Standard detection failed: {e}")
-    return "ERC-721"
+        if not hex_str or hex_str == "0x":
+            return ""
+        clean = hex_str[2:] if hex_str.startswith("0x") else hex_str
+        if len(clean) >= 128:
+            length = int(clean[64:128], 16)
+            data_hex = clean[128:128 + length * 2]
+            return bytes.fromhex(data_hex).decode("utf-8", errors="ignore").strip()
+        return bytes.fromhex(clean).decode("utf-8", errors="ignore").replace("\x00", "").strip()
+    except Exception:
+        return ""
 
-# Track the last block we checked
-last_checked_block = None
 
-def check_drops():
-    global last_checked_block
-
-    print("[Drops] Checking for new NFT drops...")
+async def get_contract_name_and_symbol(chain: str, contract_address: str):
+    """Query name() and symbol() via direct eth_call."""
+    NAME_SIG = "0x06fdde03"
+    SYMBOL_SIG = "0x95d89b41"
+    name = ""
+    symbol = ""
 
     try:
-        current_block = get_current_block()
-        if current_block is None:
-            print("[Drops] Could not get current block — skipping this cycle")
+        payload = {
+            "jsonrpc": "2.0", "id": 1, "method": "eth_call",
+            "params": [{"to": contract_address, "data": NAME_SIG}, "latest"]
+        }
+        res = await asyncio.to_thread(rpc_post, chain, payload)
+        if res and res.get("result"):
+            name = _decode_abi_string(res["result"])
+    except Exception:
+        pass
+
+    try:
+        payload = {
+            "jsonrpc": "2.0", "id": 1, "method": "eth_call",
+            "params": [{"to": contract_address, "data": SYMBOL_SIG}, "latest"]
+        }
+        res = await asyncio.to_thread(rpc_post, chain, payload)
+        if res and res.get("result"):
+            symbol = _decode_abi_string(res["result"])
+    except Exception:
+        pass
+
+    return name, symbol
+
+
+async def get_contract_token_uri(chain: str, contract_address: str):
+    """Query tokenURI(1) or uri(1) via direct eth_call."""
+    TOKEN_URI_CALL = "0xc87b56dd0000000000000000000000000000000000000000000000000000000000000001"
+    try:
+        payload = {
+            "jsonrpc": "2.0", "id": 1, "method": "eth_call",
+            "params": [{"to": contract_address, "data": TOKEN_URI_CALL}, "latest"]
+        }
+        res = await asyncio.to_thread(rpc_post, chain, payload)
+        if res and res.get("result"):
+            return _decode_abi_string(res["result"])
+    except Exception:
+        pass
+    return ""
+
+
+async def get_verified_contract_source(chain: str, contract_address: str) -> str:
+    """Fetch verified source code snippet if available from Blockscout or Etherscan API."""
+    config = EVM_CHAINS.get(chain, {})
+    explorer = config.get("explorer", "")
+    if not explorer:
+        return ""
+
+    try:
+        api_url = f"{explorer}/api?module=contract&action=getsourcecode&address={contract_address}"
+        res = await asyncio.to_thread(requests.get, api_url, timeout=4)
+        if res.status_code == 200:
+            data = res.json()
+            if data.get("status") == "1" and data.get("result"):
+                source_data = data["result"][0]
+                source_code = source_data.get("SourceCode", "")
+                if source_code:
+                    return source_code[:1500]
+    except Exception:
+        pass
+    return ""
+
+
+async def evaluate_contract_drop(chain: str, contract: str, txs: list, semaphore: asyncio.Semaphore):
+    """Evaluate and alert for a single contract drop with concurrency limiting."""
+    async with semaphore:
+        if contract in alerted_contracts_set:
             return
 
-        if last_checked_block is None:
-            last_checked_block = current_block - 100
+        short_contract = f"{contract[:6]}...{contract[-4:]}"
 
-        transfers = get_recent_transfers(last_checked_block)
-        last_checked_block = current_block
-
-        if not transfers:
-            print("[Drops] No new mint activity detected")
+        # ── DeFi / Infrastructure Fast-Skip (address blocklist) ───────
+        # Reject known LP / position / withdrawal-receipt contracts before
+        # any RPC or Gemini spend — these are not collectible NFT drops.
+        skip_reason = _is_defi_or_infrastructure(contract, "")
+        if skip_reason:
+            print(f"[Drops] ⏭️ Skipped {short_contract} on {chain}: {skip_reason}")
             return
 
-        contracts = {}
-        for tx in transfers:
-            contract = tx.get("rawContract", {}).get("address", "").lower()
-            if not contract:
+        # ── Batched Data Collection ──────────────────────────────────
+        cd = await get_contract_data_batched(chain, contract, batch_txs=txs)
+        age_hours      = cd["age_hours"]
+        mint_count     = cd["mint_count"]
+        standard       = cd["standard"]
+        unique_minters = cd["unique_minters"]
+
+        # ── Basic Filters ─────────────────────────────────────────────
+        if age_hours > 24:
+            print(f"[Drops] ⏭️ Skipped {short_contract} on {chain}: too old ({age_hours}h)")
+            return
+
+        if mint_count < MIN_MINTS_THRESHOLD:
+            print(f"[Drops] ⏭️ Skipped {short_contract} on {chain}: low mints ({mint_count} < {MIN_MINTS_THRESHOLD})")
+            return
+
+        # ── Self-mint / bot-churn Fast-Skip ───────────────────────────
+        # One wallet minting a pile of tokens to itself is a bot/self-mint,
+        # not real demand. Skip before spending a Gemini call (Gemini would
+        # only flag it as LIKELY_RUG anyway). Not added to the alerted set,
+        # so it can still be re-evaluated later if more minters join.
+        if unique_minters == 1 and mint_count >= SINGLE_MINTER_MAX_MINTS:
+            print(f"[Drops] ⏭️ Skipped {short_contract} on {chain}: single-wallet self-mint ({mint_count} mints, 1 minter)")
+            return
+
+        print(f"[Drops] ✅ {short_contract} on {chain} passed filters: {mint_count} mints, {age_hours}h old, {unique_minters} minters ({standard})")
+
+        # ── Deployer Resolution & Local Cache ─────────────────────────
+        deployer_addr = await get_contract_creator(chain, contract, EVM_CHAINS)
+        is_rugger, rug_reason = is_known_serial_rugger(deployer_addr)
+        if is_rugger:
+            print(f"[Drops] 🚫 Serial rugger blocked {short_contract}: {rug_reason}")
+            return
+
+        # ── Ethos Network Reputation Layer ────────────────────────────
+        ethos_profile = await get_ethos_profile_async(deployer_addr)
+        if ethos_profile.get("is_flagged"):
+            print(f"[Drops] 🚫 Ethos flagged creator for {short_contract} ({deployer_addr[:10]}...)")
+            return
+
+        # ── Rich Context (Names, Decentralized Metadata, Image, DEX) ──
+        name, symbol = await get_contract_name_and_symbol(chain, contract)
+
+        # ── DeFi / Infrastructure Fast-Skip (name patterns) ───────────
+        # With the on-chain name known, skip protocol position/LP tokens
+        # (Uniswap/Pancake/Slipstream positions, etc.) before the metadata,
+        # source, DEX, and Gemini calls.
+        skip_reason = _is_defi_or_infrastructure(contract, name)
+        if skip_reason:
+            print(f"[Drops] ⏭️ Skipped {name or short_contract} on {chain}: {skip_reason}")
+            return
+
+        token_uri = await get_contract_token_uri(chain, contract)
+        
+        # Resolve metadata directly from IPFS/Arweave/HTTP/Base64
+        metadata = await resolve_metadata_async(token_uri) if token_uri else {}
+        if not name and metadata.get("name"):
+            name = metadata["name"]
+        
+        image_url = metadata.get("image_url")
+        verified_source = await get_verified_contract_source(chain, contract)
+        dex_info = await get_dex_liquidity(chain, contract)
+        deployer_stats = get_deployer_stats(deployer_addr)
+
+        # ── Gemini AI Audit ───────────────────────────────────────────
+        mint_velocity = round(mint_count / max(age_hours, 0.1), 1)
+        ai_result = await gemini_score_nft({
+            "contract":                 contract,
+            "chain":                    chain,
+            "name":                     name,
+            "symbol":                   symbol,
+            "mint_count":               mint_count,
+            "age_hours":                age_hours,
+            "standard":                 standard,
+            "unique_minters":           unique_minters,
+            "mint_velocity_per_hour":   mint_velocity,
+            "token_uri":                token_uri,
+            "metadata":                 metadata,
+            "verified_source_snippet": verified_source,
+            "deployer_address":         deployer_addr,
+            "deployer_stats":           deployer_stats,
+            "ethos_profile":            ethos_profile,
+            "dex_liquidity":            dex_info,
+        })
+
+        # Record deployer outcome
+        if deployer_addr:
+            record_deployer_result(
+                deployer_address=deployer_addr,
+                contract_address=contract,
+                score=ai_result.get("score", 50),
+                verdict=ai_result.get("verdict", "UNKNOWN")
+            )
+
+        if not is_worth_alerting(ai_result, GEMINI_MIN_SCORE):
+            print(f"[Drops] 🚫 Gemini blocked {name or short_contract}: {ai_result['reason']} ({ai_result['score']}/100)")
+            return
+
+        # ── Dedup ─────────────────────────────────────────────────────
+        if len(alerted_contracts_deque) == MAX_ALERTED_CONTRACTS:
+            oldest = alerted_contracts_deque.popleft()
+            alerted_contracts_set.discard(oldest)
+        alerted_contracts_set.add(contract)
+        alerted_contracts_deque.append(contract)
+
+        # ── Build Telegram Buttons ────────────────────────────────────
+        explorer_link = get_explorer_url(chain, contract)
+        opensea_link = get_opensea_url(contract, chain)
+
+        button_rows = []
+        row1 = [
+            InlineKeyboardButton(text="🔍 Explorer", url=explorer_link),
+            InlineKeyboardButton(text="🌊 OpenSea", url=opensea_link),
+        ]
+        button_rows.append(row1)
+
+        # Ethos / Creator Social Button
+        if ethos_profile.get("ethos_url") and ethos_profile.get("score", 0) > 0:
+            button_rows.append([InlineKeyboardButton(text="🛡️ Ethos Profile", url=ethos_profile["ethos_url"])])
+        elif ethos_profile.get("x_handle"):
+            button_rows.append([InlineKeyboardButton(text=f"🐦 @{ethos_profile['x_handle']}", url=f"https://x.com/{ethos_profile['x_handle']}")])
+
+        if dex_info.get("url"):
+            dex_label = f"📈 {dex_info.get('dex_id', 'DEX')} Chart"
+            button_rows.append([InlineKeyboardButton(text=dex_label, url=dex_info["url"])])
+
+        reply_markup = InlineKeyboardMarkup(button_rows)
+
+        # ── Build Telegram Message ────────────────────────────────────
+        header_name = f"<b>{escape_html(name)}</b> ({escape_html(symbol)})\n" if name else ""
+        minter_info = f" | 👥 Minters: <b>{unique_minters}</b>" if unique_minters is not None else ""
+        creator_info = f"\n👤 Creator: <code>{deployer_addr[:6]}...{deployer_addr[-4:]}</code>" if deployer_addr else ""
+        ethos_line = format_telegram_ethos_badge(ethos_profile)
+        dex_line = f"\n{dex_info['formatted_line']}" if dex_info.get("formatted_line") else ""
+
+        text = (
+            f"🆕 <b>New NFT Drop Detected!</b>\n\n"
+            f"{header_name}"
+            f"🔗 Chain: <b>{chain.capitalize()}</b>\n"
+            f"📄 Contract: <code>{short_contract}</code>{creator_info}"
+            f"{ethos_line}\n"
+            f"🏷️ Standard: <b>{standard}</b>\n"
+            f"🔥 Mints: <b>{mint_count}</b> ({age_hours}h old){minter_info}"
+            f"{dex_line}\n\n"
+            f"<b>AI Legitimacy Audit:</b>\n"
+            f"{verdict_badge(ai_result)}"
+        )
+
+        # ── Send Image or Text Alert ──────────────────────────────────
+        sent = False
+        if image_url:
+            try:
+                img_bytes = await download_image_bytes(image_url)
+                await asend_photo(img_bytes, caption=text, parse_mode="HTML", reply_markup=reply_markup)
+                sent = True
+            except Exception as photo_err:
+                print(f"[Drops] Photo send failed: {photo_err} — falling back to text")
+
+        if not sent:
+            await asend(text, reply_markup=reply_markup)
+
+        print(f"[Drops] 🆕 Alerted: {short_contract} | {standard} | {mint_count} mints | {age_hours}h | AI {ai_result['score']}/100 on {chain}")
+
+
+async def check_drops():
+    """Main scanning loop across all EVM chains using pure RPC & Ethos reputation."""
+    global last_checked_blocks
+
+    print(f"[Drops] 🔍 Scanning {len(ALL_SUPPORTED_CHAINS)} chains for fresh NFT drops...")
+    semaphore = asyncio.Semaphore(5)
+
+    for chain in ALL_SUPPORTED_CHAINS:
+        try:
+            current_block = await get_current_block(chain)
+            if current_block is None:
+                print(f"[Drops] ⚠️ {chain}: RPC unreachable (block fetch failed)")
                 continue
-            if contract not in contracts:
-                contracts[contract] = []
-            contracts[contract].append(tx)
 
-        print(f"[Drops] Found mint activity on {len(contracts)} contract(s)")
+            last_checked = last_checked_blocks[chain]
+            step = EVM_CHAINS.get(chain, {}).get("block_step", 60)
+            if last_checked is None:
+                last_checked_blocks[chain] = max(0, current_block - step)
+                last_checked = last_checked_blocks[chain]
 
-        for contract, txs in contracts.items():
-            if contract in alerted_contracts_set:
+            transfers = await get_recent_transfers(chain, last_checked)
+            last_checked_blocks[chain] = current_block
+
+            if transfers is None:
+                print(f"[Drops] ⚠️ {chain}: RPC error during getLogs (all endpoints failed)")
                 continue
 
-            age_hours = get_contract_age_hours(contract)
-            if age_hours > 24:
-                print(f"[Drops] Skipping {contract[:10]}... — {age_hours}h old")
+            if not transfers:
+                print(f"[Drops] {chain}: 0 mint events in blocks {last_checked}→{current_block} ({current_block - last_checked} blocks)")
                 continue
 
-            mint_count = get_mint_count(contract)
-            if mint_count < MIN_MINTS_THRESHOLD:
-                print(f"[Drops] Skipping {contract[:10]}... — only {mint_count} mints so far")
-                continue
+            contracts = {}
+            for tx in transfers:
+                contract = tx.get("rawContract", {}).get("address", "").lower()
+                if not contract:
+                    continue
+                contracts.setdefault(contract, []).append(tx)
 
-            standard = get_nft_standard(contract)
-            # Add to bounded cache
-            if len(alerted_contracts_deque) == MAX_ALERTED_CONTRACTS:
-                oldest = alerted_contracts_deque.popleft()
-                alerted_contracts_set.remove(oldest)
-            alerted_contracts_set.add(contract)
-            alerted_contracts_deque.append(contract)
-            short_contract = f"{contract[:6]}...{contract[-4:]}"
+            if contracts:
+                print(f"[Drops] Found mint activity on {len(contracts)} contract(s) on {chain}")
 
-            asyncio.run(send(
-                f"🆕 New NFT Drop Detected!\n"
-                f"Contract: {short_contract}\n"
-                f"Standard: {standard}\n"
-                f"Mints so far: {mint_count}\n"
-                f"Age: {age_hours} hours old\n"
-                f"🔗 https://opensea.io/assets/ethereum/{contract}/1"
-            ))
+            # Sort by activity (number of mint events in batch) and take top 8 to stay fast
+            sorted_contracts = sorted(contracts.items(), key=lambda x: len(x[1]), reverse=True)[:8]
 
-            print(f"[Drops] 🆕 Alerted: {short_contract} | {standard} | {mint_count} mints | {age_hours}h old")
+            tasks = [
+                evaluate_contract_drop(chain, contract, txs, semaphore)
+                for contract, txs in sorted_contracts
+            ]
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
 
-    except Exception as e:
-        print(f"[Drops Error] {e}")
+        except Exception as e:
+            print(f"[Drops Error] {chain}: {e}")
