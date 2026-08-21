@@ -4,7 +4,9 @@ The Bot is created lazily on first use (not at import) so modules can be
 imported without a TELEGRAM_TOKEN present — this is what makes them testable.
 """
 import asyncio
+import base64
 import io
+from urllib.parse import unquote
 
 from telegram import Bot
 from curl_cffi import requests
@@ -33,44 +35,125 @@ def escape_html(text):
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+# IPFS gateways for fetching images (cloudflare-ipfs.com is dead — removed).
+IPFS_GATEWAYS = [
+    "https://ipfs.io/ipfs/",
+    "https://dweb.link/ipfs/",
+    "https://gateway.pinata.cloud/ipfs/",
+    "https://w3s.link/ipfs/",
+]
+
+# Telegram rejects photo uploads larger than ~10 MB — stay just under.
+MAX_IMAGE_BYTES = int(9.5 * 1024 * 1024)
+
+
+def _looks_like_svg(data: bytes) -> bool:
+    """Sniff whether raw bytes are an SVG document."""
+    if not data:
+        return False
+    head = data[:512].lstrip()
+    if head[:4].lower() == b"<svg":
+        return True
+    return head[:5].lower() == b"<?xml" and b"<svg" in head.lower()
+
+
+def _rasterize_svg(svg_bytes):
+    """Convert SVG bytes to PNG bytes via svglib + reportlab. None on failure.
+
+    Telegram's sendPhoto does not accept SVG, so fully-on-chain SVG art must be
+    rasterized before sending.
+    """
+    try:
+        from svglib.svglib import svg2rlg
+        from reportlab.graphics import renderPM
+
+        drawing = svg2rlg(io.BytesIO(svg_bytes))
+        if drawing is None:
+            return None
+        return renderPM.drawToString(drawing, fmt="PNG")
+    except Exception as e:
+        print(f"[Image] SVG rasterize failed: {e}")
+        return None
+
+
+def _guess_extension(content_type: str, data: bytes) -> str:
+    """Pick a filename extension so Telegram can detect the image format."""
+    ct = (content_type or "").lower()
+    if "png" in ct:
+        return "png"
+    if "jpeg" in ct or "jpg" in ct:
+        return "jpg"
+    if "gif" in ct:
+        return "gif"
+    if "webp" in ct:
+        return "webp"
+    # Fall back to magic-byte sniffing.
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return "png"
+
+
+def _finalize_image(data: bytes, content_type: str = ""):
+    """Turn raw image bytes into a Telegram-ready BytesIO (SVG->PNG, correct
+    filename set), or None if it can't be turned into a sendable photo."""
+    if not data:
+        return None
+    ct = (content_type or "").lower()
+    # SVG isn't accepted by Telegram sendPhoto — rasterize to PNG.
+    if "svg" in ct or _looks_like_svg(data):
+        png = _rasterize_svg(data)
+        if not png:
+            return None
+        data = png
+        ct = "image/png"
+    if len(data) > MAX_IMAGE_BYTES:
+        print(f"[Image] Skipping oversized image ({len(data)} bytes > {MAX_IMAGE_BYTES})")
+        return None
+    bio = io.BytesIO(data)
+    bio.name = f"image.{_guess_extension(ct, data)}"
+    bio.seek(0)
+    return bio
+
+
 async def download_image_bytes(url):
-    """Download an image with IPFS gateway fallback, URL validation, and data URI support."""
+    """Fetch an NFT image and return a Telegram-ready BytesIO (SVG rasterized to
+    PNG, correct filename set), or None if it can't be turned into a photo.
+
+    Callers should guard with ``if img_bytes:`` and fall back to a text alert.
+    """
     if not url:
         return None
 
-    loop = asyncio.get_running_loop()
-
-    # Handle data: URI images (base64-encoded SVGs, PNGs, etc.)
-    if url.startswith("data:image"):
+    # ── data: URIs (on-chain SVG/PNG, base64 OR URL-encoded) ──────────
+    if url.startswith("data:"):
         try:
-            raw_data = url.split(",", 1)[1]
-            import base64
-            return io.BytesIO(base64.b64decode(raw_data))
-        except Exception:
+            header, _, payload = url.partition(",")
+            mime = header[5:].split(";")[0].strip()  # between "data:" and first ";"/","
+            if ";base64" in header.lower():
+                raw = base64.b64decode(payload)
+            else:
+                raw = unquote(payload).encode("utf-8", errors="ignore")
+            ct = mime or ("image/svg+xml" if _looks_like_svg(raw) else "")
+            return _finalize_image(raw, content_type=ct)
+        except Exception as e:
+            print(f"[Image] data URI decode failed: {e}")
             return None
 
-    # Build list of URLs to try (IPFS gateway fallback)
-    IPFS_GATEWAYS = [
-        "https://ipfs.io/ipfs/",
-        "https://dweb.link/ipfs/",
-        "https://cloudflare-ipfs.com/ipfs/",
-        "https://gateway.pinata.cloud/ipfs/",
-    ]
-
-    urls_to_try = []
-    # Extract IPFS CID and build gateway list
-    ipfs_cid = None
-    for gw in IPFS_GATEWAYS:
-        if gw in url:
-            ipfs_cid = url.split("/ipfs/")[-1]
-            break
-    if ipfs_cid:
-        urls_to_try = [f"{gw}{ipfs_cid}" for gw in IPFS_GATEWAYS]
+    # ── Build candidate URLs (IPFS gateway fallback) ──────────────────
+    if "/ipfs/" in url:
+        cid = url.split("/ipfs/")[-1]
+        urls_to_try = [f"{gw}{cid}" for gw in IPFS_GATEWAYS]
     else:
         urls_to_try = [url]
 
     def _fetch(target_url):
-        # Basic URL validation to prevent curl crashes
+        # Basic URL validation to prevent curl crashes.
         if not target_url.startswith(("http://", "https://")):
             raise ValueError(f"Invalid URL scheme: {target_url[:50]}")
         res = requests.get(
@@ -82,15 +165,24 @@ async def download_image_bytes(url):
             timeout=10,
         )
         res.raise_for_status()
-        return io.BytesIO(res.content)
+        return res.content, res.headers.get("content-type", "")
 
+    loop = asyncio.get_running_loop()
     for try_url in urls_to_try:
         try:
-            return await loop.run_in_executor(None, _fetch, try_url)
+            content, content_type = await loop.run_in_executor(None, _fetch, try_url)
+            ct = (content_type or "").lower()
+            # Skip gateway error pages (HTML/JSON) that aren't the image itself.
+            if ("text/html" in ct or "application/json" in ct) and not _looks_like_svg(content):
+                continue
+            img = _finalize_image(content, content_type=content_type)
+            if img:
+                return img
         except Exception:
             continue
 
-    raise RuntimeError(f"All image download attempts failed for: {url[:80]}")
+    print(f"[Image] All download attempts failed for: {url[:80]}")
+    return None
 
 
 async def asend(text, parse_mode="HTML", reply_markup=None):

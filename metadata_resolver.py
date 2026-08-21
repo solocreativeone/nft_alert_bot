@@ -17,8 +17,8 @@ from curl_cffi import requests
 IPFS_GATEWAYS = [
     "https://ipfs.io/ipfs/",
     "https://dweb.link/ipfs/",
-    "https://cloudflare-ipfs.com/ipfs/",
     "https://gateway.pinata.cloud/ipfs/",
+    "https://w3s.link/ipfs/",
 ]
 
 ARWEAVE_GATEWAY = "https://arweave.net/"
@@ -123,22 +123,55 @@ def fetch_metadata_sync(token_uri: str) -> dict:
     return {}
 
 
+_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".avif")
+
+
+def _looks_like_image(url: str) -> bool:
+    """True if a URL/URI is very likely a direct image (not video/HTML/3D model)."""
+    if not url:
+        return False
+    u = url.strip().lower()
+    if u.startswith("data:image"):
+        return True
+    path = u.split("?", 1)[0].split("#", 1)[0]
+    return path.endswith(_IMAGE_EXTENSIONS)
+
+
 def _normalize_metadata(raw_data: dict) -> dict:
     """Extract standard attributes from raw metadata JSON."""
     name = raw_data.get("name") or ""
     description = raw_data.get("description") or ""
 
-    # Find image
+    # Prefer real image fields.
     image_raw = (
         raw_data.get("image")
         or raw_data.get("image_url")
-        or raw_data.get("image_data")
         or raw_data.get("artwork_url")
-        or raw_data.get("animation_url")
         or ""
     )
 
-    image_url = resolve_uri(image_raw) if image_raw else ""
+    # image_data usually holds raw on-chain SVG markup (or a full data URI).
+    image_data = raw_data.get("image_data") or ""
+
+    # Only fall back to animation_url when it actually points at an image — it's
+    # frequently an .mp4/.glb/.html which Telegram can't render as a photo.
+    if not image_raw and not image_data:
+        animation = raw_data.get("animation_url") or ""
+        if _looks_like_image(animation):
+            image_raw = animation
+
+    image_url = ""
+    if image_raw:
+        image_url = resolve_uri(image_raw)
+    elif image_data:
+        stripped = image_data.strip()
+        if stripped.startswith("data:"):
+            image_url = stripped
+        elif "<svg" in stripped[:256].lower():
+            # Raw SVG markup embedded directly in metadata — expose it as a data
+            # URI so the notifier can rasterize it to PNG for Telegram.
+            from urllib.parse import quote
+            image_url = "data:image/svg+xml;utf8," + quote(stripped)
 
     return {
         "name": name,

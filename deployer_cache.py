@@ -134,12 +134,41 @@ def record_deployer_result(
     return stats
 
 
-async def get_contract_creator(chain: str, contract_address: str, custom_rpc_chains: dict = None) -> str:
+def _to_int(value):
+    """Parse an int from a decimal or 0x-hex string; return None on failure."""
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        s = str(value).strip()
+        if not s:
+            return None
+        if s.lower().startswith("0x"):
+            return int(s, 16)
+        return int(s)
+    except (ValueError, TypeError):
+        return None
+
+
+async def get_contract_creation_info(chain: str, contract_address: str, custom_rpc_chains: dict = None) -> dict:
     """
-    Query Blockscout / Etherscan-compatible API to obtain the contract creator/deployer address.
+    Query a Blockscout / Etherscan-compatible explorer for a contract's creation
+    record via the getcontractcreation endpoint.
+
+    Returns whatever the explorer provides so callers can derive the contract's
+    TRUE deployment age (not the age of the earliest mint in a scan window):
+
+        {
+            "creator":      lowercase deployer address (str, "" if unknown),
+            "tx_hash":      creation transaction hash (str, "" if unknown),
+            "deploy_block": int block number, or None,
+            "deploy_ts":    int unix timestamp, or None,
+        }
     """
+    empty = {"creator": "", "tx_hash": "", "deploy_block": None, "deploy_ts": None}
     if not contract_address:
-        return ""
+        return empty
 
     explorer_base = ""
     if custom_rpc_chains and chain in custom_rpc_chains:
@@ -148,7 +177,7 @@ async def get_contract_creator(chain: str, contract_address: str, custom_rpc_cha
         explorer_base = "https://robinhoodchain.blockscout.com"
 
     if not explorer_base:
-        return ""
+        return empty
 
     api_url = f"{explorer_base}/api?module=contract&action=getcontractcreation&contractaddresses={contract_address}"
 
@@ -162,9 +191,32 @@ async def get_contract_creator(chain: str, contract_address: str, custom_rpc_cha
             if data.get("status") == "1" and data.get("result"):
                 items = data["result"]
                 if isinstance(items, list) and len(items) > 0:
-                    creator = items[0].get("contractCreator") or items[0].get("creatorAddress") or ""
-                    return creator.lower() if creator else ""
+                    item = items[0]
+                    creator = item.get("contractCreator") or item.get("creatorAddress") or ""
+                    tx_hash = (
+                        item.get("txHash")
+                        or item.get("creationTxHash")
+                        or item.get("transactionHash")
+                        or ""
+                    )
+                    return {
+                        "creator": creator.lower() if creator else "",
+                        "tx_hash": tx_hash.lower() if tx_hash else "",
+                        "deploy_block": _to_int(item.get("blockNumber")),
+                        "deploy_ts": _to_int(item.get("timestamp") or item.get("blockTimestamp")),
+                    }
     except Exception as e:
-        print(f"[DeployerCache] ⚠️ Creator lookup failed for {contract_address[:10]}...: {e}")
+        print(f"[DeployerCache] ⚠️ Creation-info lookup failed for {contract_address[:10]}...: {e}")
 
-    return ""
+    return empty
+
+
+async def get_contract_creator(chain: str, contract_address: str, custom_rpc_chains: dict = None) -> str:
+    """
+    Return the contract creator/deployer address (lowercase), or "" if unknown.
+
+    Thin backward-compatible wrapper over get_contract_creation_info() for callers
+    that only need the deployer address.
+    """
+    info = await get_contract_creation_info(chain, contract_address, custom_rpc_chains)
+    return info.get("creator", "")

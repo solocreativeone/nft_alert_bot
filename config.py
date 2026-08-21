@@ -32,3 +32,9 @@ DROPS_CHECK_INTERVAL = int(os.environ.get("DROPS_CHECK_INTERVAL", 1))
 MINT_COOLDOWN_MINUTES = int(os.environ.get("MINT_COOLDOWN_MINUTES", 10))
 MIN_MINTS_THRESHOLD = int(os.environ.get("MIN_MINTS_THRESHOLD", 5))
 FLOOR_COOLDOWN_MINUTES = int(os.environ.get("FLOOR_COOLDOWN_MINUTES", 30))
+
+# A "drop" is only fresh if its CONTRACT was deployed within this many hours.
+# Established collections that are still minting (open editions, etc.) are
+# skipped as "not a new drop". Falls back to mint-window age when the explorer
+# can't provide a deployment timestamp. Tunable via env.
+MAX_CONTRACT_AGE_HOURS = int(os.environ.get("MAX_CONTRACT_AGE_HOURS", 48))

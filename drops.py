@@ -7,17 +7,17 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from notifier import asend, asend_photo, download_image_bytes, escape_html
 from gemini_filter import gemini_score_nft, is_worth_alerting, verdict_badge
-from deployer_cache import get_contract_creator, is_known_serial_rugger, record_deployer_result, get_deployer_stats
+from deployer_cache import get_contract_creator, get_contract_creation_info, is_known_serial_rugger, record_deployer_result, get_deployer_stats
 from dex_liquidity import get_dex_liquidity
 from ethos import get_ethos_profile_async, format_telegram_ethos_badge
 from metadata_resolver import resolve_metadata_async
 
 try:
-    from private.config_live import ALCHEMY_API_KEY, MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE
+    from private.config_live import ALCHEMY_API_KEY, MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE, MAX_CONTRACT_AGE_HOURS
     print("[Drops] ✅ Private config loaded")
 except ImportError as e:
     print(f"[Drops] ❌ ImportError: {e}")
-    from config import ALCHEMY_API_KEY, MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE
+    from config import ALCHEMY_API_KEY, MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE, MAX_CONTRACT_AGE_HOURS
 
 # Track contracts we've already alerted on with bounded cache
 MAX_ALERTED_CONTRACTS = 10000
@@ -188,6 +188,38 @@ EVM_CHAINS = {
     },
 }
 
+# ── Alchemy premium RPC wiring ───────────────────────────────────────────────
+# Public RPCs throttle eth_getLogs and cap block ranges, making mainnet detection
+# unreliable. When an Alchemy key is configured, prepend Alchemy as the preferred
+# endpoint for the chains it supports (public RPCs stay as fallback).
+_ALCHEMY_SUBDOMAINS = {
+    "ethereum": "eth-mainnet",
+    "base": "base-mainnet",
+    "polygon": "polygon-mainnet",
+    "arbitrum": "arb-mainnet",
+    "optimism": "opt-mainnet",
+}
+
+
+def _wire_alchemy_rpcs():
+    key = (ALCHEMY_API_KEY or "").strip()
+    if not key or "YOUR_KEY" in key:
+        return
+    wired = []
+    for chain, subdomain in _ALCHEMY_SUBDOMAINS.items():
+        if chain in EVM_CHAINS:
+            endpoint = f"https://{subdomain}.g.alchemy.com/v2/{key}"
+            rpcs = EVM_CHAINS[chain]["rpcs"]
+            if endpoint not in rpcs:
+                EVM_CHAINS[chain]["rpcs"] = [endpoint] + rpcs
+                wired.append(chain)
+    if wired:
+        print(f"[Drops] ✅ Alchemy RPCs wired for: {', '.join(wired)}")
+
+
+_wire_alchemy_rpcs()
+
+
 ALL_SUPPORTED_CHAINS = list(EVM_CHAINS.keys())
 last_checked_blocks = {chain: None for chain in ALL_SUPPORTED_CHAINS}
 
@@ -243,6 +275,82 @@ async def get_current_block(chain: str):
         return None
 
 
+# ── True contract-age detection ──────────────────────────────────────────────
+# The mint-window age (get_contract_data_batched) can't tell an old-but-active
+# collection from a fresh drop. We derive the CONTRACT's real deployment time
+# from the explorer's creation record (reusing get_contract_creation_info) and
+# cache it per contract, bounded so it can't grow without limit.
+MAX_DEPLOY_TS_CACHE = 5000
+contract_deploy_ts_cache = {}
+_deploy_ts_cache_order = deque(maxlen=MAX_DEPLOY_TS_CACHE)
+
+
+def _cache_deploy_ts(key: str, ts):
+    """Store a deployment timestamp (or None) with bounded eviction."""
+    if key in contract_deploy_ts_cache:
+        return
+    if len(_deploy_ts_cache_order) == MAX_DEPLOY_TS_CACHE:
+        oldest = _deploy_ts_cache_order.popleft()
+        contract_deploy_ts_cache.pop(oldest, None)
+    contract_deploy_ts_cache[key] = ts
+    _deploy_ts_cache_order.append(key)
+
+
+async def _resolve_deploy_timestamp(chain: str, info: dict):
+    """Resolve a contract's deployment unix timestamp from explorer creation info,
+    falling back to RPC (block -> timestamp, or txHash -> block -> timestamp).
+    Returns an int timestamp, or None if it can't be determined."""
+    if info.get("deploy_ts"):
+        return info["deploy_ts"]
+
+    deploy_block = info.get("deploy_block")
+    tx_hash = info.get("tx_hash")
+
+    # txHash -> block number
+    if deploy_block is None and tx_hash:
+        tx_payload = {
+            "jsonrpc": "2.0", "id": 1, "method": "eth_getTransactionByHash",
+            "params": [tx_hash],
+        }
+        try:
+            tx_data = await asyncio.to_thread(rpc_post, chain, tx_payload)
+            result = tx_data.get("result") if isinstance(tx_data, dict) else None
+            block_hex = result.get("blockNumber") if isinstance(result, dict) else None
+            if block_hex:
+                deploy_block = int(block_hex, 16)
+        except Exception:
+            pass
+
+    # block number -> timestamp
+    if deploy_block is not None:
+        block_payload = {
+            "jsonrpc": "2.0", "id": 2, "method": "eth_getBlockByNumber",
+            "params": [hex(deploy_block), False],
+        }
+        try:
+            block_data = await asyncio.to_thread(rpc_post, chain, block_payload)
+            if block_data and block_data.get("result"):
+                return int(block_data["result"].get("timestamp", "0x0"), 16)
+        except Exception:
+            pass
+
+    return None
+
+
+async def get_contract_age_hours(chain: str, contract: str, info: dict):
+    """Return the contract's TRUE age in hours since deployment, or None if the
+    explorer/RPC can't tell us. Cached per contract (result reused, even None)."""
+    key = f"{chain}:{contract.lower()}"
+    if key in contract_deploy_ts_cache:
+        ts = contract_deploy_ts_cache[key]
+    else:
+        ts = await _resolve_deploy_timestamp(chain, info)
+        _cache_deploy_ts(key, ts)
+    if not ts:
+        return None
+    return round((datetime.now(timezone.utc).timestamp() - ts) / 3600, 1)
+
+
 def get_explorer_url(chain: str, contract: str) -> str:
     """Return the correct block explorer contract URL."""
     config = EVM_CHAINS.get(chain, {})
@@ -259,9 +367,11 @@ def get_opensea_url(contract: str, chain: str = "ethereum") -> str:
     return f"https://opensea.io/assets/{chain}/{contract}/1"
 
 
-async def get_recent_transfers(chain: str, from_block: int):
+async def get_recent_transfers(chain: str, from_block: int, to_block: int):
     """
     Standard eth_getLogs for all chains detecting both ERC-721 and ERC-1155 mint events.
+    Scans the explicit [from_block, to_block] range (never "latest") so callers can
+    advance their watermark to exactly to_block with no overlap / re-scan.
     Detects:
       - ERC-721:  Transfer(0x0, to, tokenId)
       - ERC-1155: TransferSingle(operator, 0x0, to, id, value)
@@ -272,7 +382,7 @@ async def get_recent_transfers(chain: str, from_block: int):
         "method": "eth_getLogs",
         "params": [{
             "fromBlock": hex(from_block),
-            "toBlock": "latest",
+            "toBlock": hex(to_block),
             "topics": [
                 ERC721_TRANSFER_TOPIC,
                 ZERO_ADDRESS_TOPIC,  # from == 0x0 (mint)
@@ -286,7 +396,7 @@ async def get_recent_transfers(chain: str, from_block: int):
         "method": "eth_getLogs",
         "params": [{
             "fromBlock": hex(from_block),
-            "toBlock": "latest",
+            "toBlock": hex(to_block),
             "topics": [
                 ERC1155_SINGLE_TOPIC,
                 None,
@@ -560,8 +670,20 @@ async def evaluate_contract_drop(chain: str, contract: str, txs: list, semaphore
 
         print(f"[Drops] ✅ {short_contract} on {chain} passed filters: {mint_count} mints, {age_hours}h old, {unique_minters} minters ({standard})")
 
-        # ── Deployer Resolution & Local Cache ─────────────────────────
-        deployer_addr = await get_contract_creator(chain, contract, EVM_CHAINS)
+        # ── Deployer Resolution + TRUE deployment age (one explorer call) ─
+        creation_info = await get_contract_creation_info(chain, contract, EVM_CHAINS)
+        deployer_addr = creation_info.get("creator", "")
+
+        # True-age gate: skip collections whose CONTRACT was deployed long ago,
+        # even if they're minting right now. The mint-window age above can't catch
+        # these — an old open-edition still minting always looks minutes-old. When
+        # the explorer can't give us a deploy timestamp, true_age is None and we
+        # fall back to the mint-window age check above (don't over-block).
+        true_age_hours = await get_contract_age_hours(chain, contract, creation_info)
+        if true_age_hours is not None and true_age_hours > MAX_CONTRACT_AGE_HOURS:
+            print(f"[Drops] ⏭️ Skipped {short_contract} on {chain}: contract too old (deployed {true_age_hours}h ago)")
+            return
+
         is_rugger, rug_reason = is_known_serial_rugger(deployer_addr)
         if is_rugger:
             print(f"[Drops] 🚫 Serial rugger blocked {short_contract}: {rug_reason}")
@@ -686,8 +808,9 @@ async def evaluate_contract_drop(chain: str, contract: str, txs: list, semaphore
         if image_url:
             try:
                 img_bytes = await download_image_bytes(image_url)
-                await asend_photo(img_bytes, caption=text, parse_mode="HTML", reply_markup=reply_markup)
-                sent = True
+                if img_bytes:
+                    await asend_photo(img_bytes, caption=text, parse_mode="HTML", reply_markup=reply_markup)
+                    sent = True
             except Exception as photo_err:
                 print(f"[Drops] Photo send failed: {photo_err} — falling back to text")
 
@@ -714,18 +837,35 @@ async def check_drops():
             last_checked = last_checked_blocks[chain]
             step = EVM_CHAINS.get(chain, {}).get("block_step", 60)
             if last_checked is None:
-                last_checked_blocks[chain] = max(0, current_block - step)
-                last_checked = last_checked_blocks[chain]
+                last_checked = max(0, current_block - step)
+                last_checked_blocks[chain] = last_checked
 
-            transfers = await get_recent_transfers(chain, last_checked)
-            last_checked_blocks[chain] = current_block
+            # No new blocks since last scan — skip so we never re-scan the same
+            # window (a source of duplicate alerts).
+            if current_block <= last_checked:
+                continue
+
+            from_block = last_checked + 1
+            # Clamp the span so a long downtime doesn't produce an oversized
+            # getLogs range that public RPCs reject. Skipping the excess is
+            # preferable to a failed scan that never advances the watermark.
+            max_span = max(step * 5, 2000)
+            if current_block - from_block > max_span:
+                from_block = current_block - max_span
+
+            transfers = await get_recent_transfers(chain, from_block, current_block)
 
             if transfers is None:
+                # RPC failure — do NOT advance the watermark; retry this range
+                # next cycle instead of skipping it.
                 print(f"[Drops] ⚠️ {chain}: RPC error during getLogs (all endpoints failed)")
                 continue
 
+            # Scan succeeded — advance the watermark past the scanned range.
+            last_checked_blocks[chain] = current_block
+
             if not transfers:
-                print(f"[Drops] {chain}: 0 mint events in blocks {last_checked}→{current_block} ({current_block - last_checked} blocks)")
+                print(f"[Drops] {chain}: 0 mint events in blocks {from_block}→{current_block} ({current_block - from_block + 1} blocks)")
                 continue
 
             contracts = {}

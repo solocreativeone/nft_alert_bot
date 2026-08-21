@@ -222,20 +222,24 @@ async def gemini_score_nft(contract_data: dict) -> dict:
             }
         print(f"[Gemini] ⚠️ Scoring failed for {contract[:10]}...: {err_str[:100]}")
         return {
-            "score": 50,
-            "verdict": "UNKNOWN",
-            "reason": "AI audit temporarily unavailable.",
+            "score": 0,
+            "verdict": "ERROR",
+            "reason": "AI audit failed — alert suppressed to avoid unvetted drops.",
         }
 
 
 def is_worth_alerting(result: dict, min_score: int = GEMINI_MIN_SCORE) -> bool:
     """
     Return True if this NFT meets quality criteria for a Telegram alert.
-    LIKELY_RUG and RATE_LIMITED (quota exhausted) are always blocked;
-    UNKNOWN (filter disabled / transient error) passes through.
+
+    Fail CLOSED on anything that means "we couldn't actually vet this":
+    LIKELY_RUG, RATE_LIMITED (quota exhausted) and ERROR (API failure) are all
+    blocked, so a Gemini outage suppresses alerts instead of flooding unvetted
+    drops. UNKNOWN (filter intentionally disabled / not configured) still passes
+    so users without a Gemini key keep getting alerts.
     """
     verdict = result.get("verdict", "UNKNOWN")
-    if verdict in ("LIKELY_RUG", "RATE_LIMITED"):
+    if verdict in ("LIKELY_RUG", "RATE_LIMITED", "ERROR"):
         return False
     if verdict == "UNKNOWN":
         return True
@@ -256,6 +260,8 @@ def verdict_badge(result: dict) -> str:
         badge = f"✅ <b>Looks Legit</b> ({s}/100)"
     elif v == "RATE_LIMITED":
         badge = f"⏳ <b>AI Audit Paused (quota)</b>"
+    elif v == "ERROR":
+        badge = f"⚠️ <b>AI Audit Failed</b>"
     else:
         badge = f"🤷 <b>Unscored</b>"
 

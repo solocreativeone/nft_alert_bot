@@ -179,8 +179,9 @@ async def check_btc_ordinals():
             if image_url:
                 try:
                     img_bytes = await download_image_bytes(image_url)
-                    await asend_photo(img_bytes, caption=text, parse_mode="HTML", reply_markup=reply_markup)
-                    sent = True
+                    if img_bytes:
+                        await asend_photo(img_bytes, caption=text, parse_mode="HTML", reply_markup=reply_markup)
+                        sent = True
                 except Exception as photo_err:
                     print(f"[Bitcoin] Photo send failed: {photo_err} — falling back to text")
 

@@ -36,3 +36,4 @@ DROPS_CHECK_INTERVAL = 1
 MINT_COOLDOWN_MINUTES = 10
 MIN_MINTS_THRESHOLD = 5
 FLOOR_COOLDOWN_MINUTES = 30
+MAX_CONTRACT_AGE_HOURS = 48   # Skip drops whose contract was deployed longer ago than this

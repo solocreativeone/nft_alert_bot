@@ -49,8 +49,9 @@ async def send_mint_alert(col, token_id, short_addr, image_url, chain):
     if image_url:
         try:
             image_bytes = await download_image_bytes(image_url)
-            await asend_photo(image_bytes, caption=text, parse_mode="HTML", reply_markup=reply_markup)
-            sent = True
+            if image_bytes:
+                await asend_photo(image_bytes, caption=text, parse_mode="HTML", reply_markup=reply_markup)
+                sent = True
         except Exception as e:
             print(f"[Mint] Photo send failed for #{token_id}: {e} — falling back to text")
 
