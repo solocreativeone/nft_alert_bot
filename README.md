@@ -1,113 +1,127 @@
 # 🤖 NFT Alert Bot
 
-A lightweight Ethereum NFT bot and **on-chain event crawler** that tracks
-**floor price movements**, **new mints**, **new collection drops**, and **upcoming launches** -
-and sends real-time alerts straight to your Telegram.
+### *Your Real-Time Gateway to the NFT Space - Direct to Telegram* 🚀
 
-No webhooks. No complex infrastructure. One service. Runs forever on Railway's free tier.
+An intelligent, multi-chain NFT crawler and tracker that monitors new collection drops on **Ethereum, Polygon, Base, Arbitrum, Optimism, and Robinhood Chain**, alongside upcoming mint schedules on **NFTCalendar**. It delivers real-time alerts straight to your Telegram DM, complete with high-resolution image previews, on-chain legitimacy scoring by **Gemini AI**, DEX liquidity detection, deployer history tracking, and direct OpenSea/explorer links.
 
----
-
-## Features
-
-- 📅 **Pre-Mint Calendar** - monitors OpenSea for newly launched collections and alerts you before they sell out
-- 🔥 **Live & Upcoming Mints** - tracks OpenSea's curated live and upcoming mint list in real-time
-- 🆕 **New Drop Alerts** - blockchain event listener that detects brand new ERC-721/1155 collections the moment they start minting on Ethereum
-- 🚨 **Floor Drop Alerts** - get notified when a collection's floor falls below your target
-- 🚀 **Floor Pump Alerts** - get notified when a collection's floor rises above your target
-- 🟢 **Mint Tracker** - detects new mints in real-time by polling on-chain transfer events
-- 📬 **Telegram delivery** - all alerts go straight to your Telegram DM
-- 🤖 **Telegram commands** - manage your watchlist directly from Telegram
-- ☁️ **Railway-ready** - deploys as a background worker, runs 24/7 for free
+No webhooks, no complex database setups, and zero maintenance. Perfect for running 24/7 on Railway or any VPS.
 
 ---
 
-## Prerequisites
+## 🌟 Key Features (In Plain English)
 
-- Python 3.10+
-- A [Telegram bot token](https://t.me/BotFather)
-- An [OpenSea API key](https://opensea.io/developers) (free tier)
-- An [Alchemy API key](https://alchemy.com) (free tier) - for new drop detection
+- 🧠 **Gemini AI Legitimacy & Risk Auditor:** Powered by Google's `gemini-3.5-flash-lite`. Every newly detected drop is inspected for:
+  - **On-chain Wallet Distribution:** Unique minters vs. total mint count (identifying bot minting and insider wash-trading).
+  - **Mint Velocity Analysis:** Real-time velocity tracking (mints/hour) to spot artificial spikes and bot sweeps.
+  - **Decentralized Metadata Verification:** Inspects `tokenURI` for IPFS, Arweave, or on-chain SVG storage versus broken/centralized URLs.
+  - **Contract & Identity Audit:** Evaluates verified source code from Blockscout, detects copycats, trademark infringement, and unrenounced backdoors.
+  - **Deployer Reputation & History:** Incorporates creator track record and past rug flags into the assessment.
+  - **DEX Pool Backing:** Factors active token/NFT liquidity depth into the legitimacy score.
+  - **Natural Language Briefs:** Provides concise 1-2 sentence executive summaries directly in Telegram alerts.
+- 🛑 **Deployer History Cache & Serial-Rug Fast-Block:** Tracks creator wallet history in a lightweight local cache (`deployers.json`). Known serial ruggers are blocked instantly before calling Gemini, saving API credits and reducing alert latency.
+- 💧 **Real-Time DEX Liquidity Detection:** Integrates DexScreener to check whether a contract has active trading liquidity (e.g. Uniswap or PancakeSwap pairs), reporting pool depth and 24h trading volume directly in alerts.
+- ⚡ **Optimized Robinhood Chain Tracker:** High-throughput batch RPC querying collapses multiple contract calls into a single log scan, eliminating rate limits (429s) while extracting unique minter metrics.
+- 🔗 **Direct OpenSea & Explorer Links:** Every alert includes direct links to block explorers (Blockscout, Etherscan) and direct asset pages on OpenSea, letting you inspect and trade immediately without copy-pasting contract addresses.
+- 📡 **Multi-Pipeline & Multi-Chain Monitoring:**
+  - **On-Chain Drops:** Real-time mint detection across Ethereum, Polygon, Base, Arbitrum, Optimism, and Robinhood Chain.
+  - **NFTCalendar Drops:** Upcoming and live mint schedules from the Web's largest drop aggregator.
+- 🛡️ **Cloudflare Bypass Tech:** Uses `curl_cffi` for browser TLS/JA3 impersonation to scrape drop aggregators without hitting `403 Forbidden` barriers.
+- 🖼️ **Reliable Image Delivery:** Downloads image bytes in-memory and uploads them directly to Telegram's photo API, avoiding broken image previews.
+- 🧠 **Smart Deduplication:** Memory-bounded caching prevents duplicate alerts for already-seen contracts and scheduled drops.
 
 ---
 
-## Setup
+## 📊 Sample Telegram Alert Preview
 
-### 1. Clone the repo
+```text
+🆕 New NFT Drop Detected!
+
+Pool's Closed Guards Gen 2 (GUARD2)
+🔗 Chain: Robinhood
+📄 Contract: 0x2117...5445
+👤 Creator: 0x89ab...c120
+🏷️ Standard: ERC-721
+🔥 Mints: 78 (19.1h old) | 👥 Minters: 20
+💧 Liquidity: $24.5K (Uniswap) | 24h Vol: $12.3K
+
+AI Legitimacy Audit:
+✅ Looks Legit (85/100)
+💡 The collection shows healthy wallet diversity with 20 unique minters across 78 mints, a steady mint velocity, and fully on-chain metadata via Base64 encoded SVGs, indicating a legitimate and well-constructed project.
+
+[ 🔍 Blockscout ]  [ 🌊 OpenSea ]  [ 📈 Uniswap Chart ]
+```
+
+---
+
+## 🛠️ Prerequisites
+
+Before you start, make sure you have:
+1. **Python 3.10+** installed on your system.
+2. A **Telegram Bot Token** (Create one via [@BotFather](https://t.me/BotFather) on Telegram).
+3. Your **Telegram Chat ID** (Find it by sending a message to your bot and checking `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates`).
+4. A **Gemini API Key** (Free tier available at [aistudio.google.com](https://aistudio.google.com)).
+5. An **OpenSea API Key** (Available at [opensea.io/developers](https://opensea.io/developers)).
+6. An **Alchemy API Key** (Free tier available at [alchemy.com](https://alchemy.com) for EVM chains).
+
+---
+
+## 🚀 Quick Start & How to Run
+
+### 1. Clone & Navigate to the Repository
 
 ```bash
 git clone https://github.com/solocreativeone/NFT_Alert_Bot.git
 cd NFT_Alert_Bot
 ```
 
-### 2. Create a virtual environment
+### 2. Set Up a Virtual Environment & Activate
 
 ```bash
+# Create venv
 python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Activate venv (macOS/Linux)
+source .venv/bin/activate
+
+# Activate venv (Windows)
+.venv\Scripts\activate
 ```
 
-> Every time you return to work on the bot, activate the venv first.
-
-### 3. Install dependencies
+### 3. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Create your Telegram bot
+### 4. Configuration
 
-1. Open Telegram → search **@BotFather**
-2. Send `/newbot` and follow the prompts
-3. Copy the **API token** it gives you
-4. Start a chat with your new bot
-5. Visit `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` to find your **chat ID**
+You can configure the bot in two ways:
 
-### 5. Get an OpenSea API key
+#### Option A: Using Environment Variables (`.env`)
+Create a `.env` file in the project root:
 
-Sign up at [opensea.io/developers](https://opensea.io/developers) and copy your API key from the dashboard. No credit card required on the free tier.
+```env
+TELEGRAM_TOKEN=your_telegram_bot_token_here
+CHAT_ID=your_telegram_chat_id_here
+OPENSEA_API_KEY=your_opensea_api_key_here
+ALCHEMY_API_KEY=your_alchemy_api_key_here
+GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MIN_SCORE=40
+```
 
-### 6. Configure your collections
-
-Copy `config.example.py` to `private/config_live.py` and fill in your real values for local development:
+#### Option B: Using a Configuration File (`config.py`)
+Modify `config.py` in the root directory, or copy to `private/config_live.py` (which is git-ignored):
 
 ```python
-COLLECTIONS = [
-    {
-        "name": "Bored Ape Yacht Club",
-        "slug": "boredapeyachtclub",
-        "contract": "0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D",
-        "floor_alert_low": 10.0,
-        "floor_alert_high": 20.0,
-    },
-]
+TELEGRAM_TOKEN = "your_telegram_bot_token_here"
+CHAT_ID = "your_telegram_chat_id_here"
+OPENSEA_API_KEY = "your_opensea_api_key_here"
+ALCHEMY_API_KEY = "your_alchemy_api_key_here"
+GEMINI_API_KEY = "your_gemini_api_key_here"
+GEMINI_MIN_SCORE = 40
 ```
 
-The `private/` folder is blocked by `.gitignore` and never pushed to GitHub.
-
-> **Security note:** `watchlist.json` and `.venv/` are also blocked by `.gitignore`. Never force-add them to git.
-
-### 7. Set environment variables
-
-Create a `.env` file locally (never commit this):
-
-```
-TELEGRAM_TOKEN=your_token_here
-CHAT_ID=your_chat_id_here
-OPENSEA_API_KEY=your_opensea_key
-ALCHEMY_API_KEY=your_alchemy_key
-```
-
-Or export them directly:
-
-```bash
-export TELEGRAM_TOKEN=...
-export CHAT_ID=...
-export OPENSEA_API_KEY=...
-export ALCHEMY_API_KEY=...
-```
-
-### 8. Run locally
+### 5. Launch the Bot
 
 ```bash
 python bot.py
@@ -115,102 +129,67 @@ python bot.py
 
 ---
 
-## Telegram Commands
+## 🎯 Scoring & Filter Thresholds
 
-Manage your watchlist directly from Telegram without editing any files:
+| Score Range | Verdict Badge | Outcome |
+|---|---|---|
+| **60 - 100** | ✅ **Looks Legit** | High-confidence launch; alerted with executive summary. |
+| **40 - 59** | ⚠️ **Suspicious / High Risk** | Speculative or unverified project; alerted with risk explanation. |
+| **0 - 39** (or `LIKELY_RUG`) | 🚨 **Likely Rug / Bot Churn** | Automatically blocked from Telegram. |
 
-| Command | Description |
-|---|---|
-| `/start` | Welcome message and command overview |
-| `/watch 0xContract` | Add a collection to your watchlist |
-| `/unwatch 0xContract` | Remove a collection from your watchlist |
-| `/list` | Show all currently watched collections |
-| `/live` | Check live and upcoming mints on OpenSea right now |
-| `/help` | Show all available commands |
-
-**Example:**
-```
-/watch 0xbd3531da5cf5857e7cfaa92426877b022e612cf8
-```
-Bot replies:
-```
-✅ Now watching: Pudgy Penguins
-Current floor: 4.456 ETH
-🚨 Alert low: 4.450 ETH
-🚀 Alert high: 4.50 ETH
-```
+> **Tip:** Adjust `GEMINI_MIN_SCORE` in your `.env` or Railway settings to control your notification volume. Set to `60` or `70` for strictly high-conviction drops, or keep at `40` to see early speculative projects.
 
 ---
 
-## Deploy to Railway
+## 💬 Telegram Commands
 
-1. Push this repo to GitHub
-2. Go to [railway.app](https://railway.app) → **New Project → Deploy from GitHub repo**
-3. Connect your GitHub account and select your repo
-4. Go to the **Variables** tab and add the following:
+Manage your watchlist directly from Telegram without editing config files:
+
+| Command | Description |
+|---|---|
+| `/start` | Welcome message and list of commands |
+| `/watch <0xContract>` | Add a contract to your watchlist |
+| `/unwatch <0xContract>` | Remove a contract from your watchlist |
+| `/list` | Show your active watched collections |
+| `/live` | View the top 10 upcoming Ethereum mints immediately |
+| `/help` | Display command help |
+
+---
+
+## ☁️ Deploying to Railway (24/7 Cloud Hosting)
+
+1. Push this project to your GitHub repository.
+2. Log into [railway.app](https://railway.app) and create a **New Project**.
+3. Select **Deploy from GitHub repo** and connect your project repository.
+4. Go to **Settings/Variables** in your Railway dashboard and add:
    - `TELEGRAM_TOKEN`
    - `CHAT_ID`
    - `OPENSEA_API_KEY`
    - `ALCHEMY_API_KEY`
-
-**Optional** - override default poll intervals via Railway Variables:
-
-| Variable | Default | Description |
-|---|---|---|
-| `FLOOR_CHECK_INTERVAL` | `5` | Floor price check frequency (minutes) |
-| `MINT_CHECK_INTERVAL` | `1` | Mint tracker frequency (minutes) |
-| `DROPS_CHECK_INTERVAL` | `1` | New drop detection frequency (minutes) |
-| `MINT_COOLDOWN_MINUTES` | `10` | Min gap between mint alerts per collection |
-| `MIN_MINTS_THRESHOLD` | `5` | Min mints before alerting on a new drop |
-| `FLOOR_COOLDOWN_MINUTES` | `30` | Min gap between floor alerts per collection |
-
-5. Railway auto-detects `railway.toml` and deploys automatically
-
-Railway will keep the bot running 24/7. Monitor logs under the **Deployments** tab.
+   - `GEMINI_API_KEY`
+   - `GEMINI_MIN_SCORE` (e.g. `40`)
+5. Railway will deploy from `railway.toml` and keep the bot running 24/7.
 
 ---
 
-## Project Structure
+## 📂 Project Structure
 
-```
-nft-alert-bot/
-├── bot.py                # Entry point - schedules and runs everything
-├── floor.py              # Floor price checker and alert logic
-├── mint.py               # Mint tracker via polling
-├── drops.py              # New drop detector via Alchemy
-├── live_drops.py         # Live & upcoming mints via OpenSea
-├── calendar_tracker.py   # Pre-mint calendar via OpenSea API
-├── commands.py           # Telegram bot commands (/watch /unwatch /list /live)
-├── watchlist.py          # Persistent watchlist - saved to watchlist.json
-├── config.py             # Collections config and env var loading
-├── config.example.py     # Sample config for contributors
-├── railway.toml          # Railway deployment config
-├── watchlist.json        # Auto-created at runtime — never commit this
-├── requirements.txt
-└── .gitignore
-```
+- `bot.py`: Main entry point: runs async task loops and Telegram command listener.
+- `gemini_filter.py`: Gemini AI scoring engine with on-chain context, IPFS inspection, deployer stats, and DEX liquidity.
+- `deployer_cache.py`: Deployer wallet cache and serial-rug pre-filter against Blockscout creator history.
+- `dex_liquidity.py`: Real-time DEX pool and volume detector powered by DexScreener.
+- `drops.py`: Multi-chain mint detector, metadata reader, and batched Robinhood RPC handler.
+- `notifier.py`: Shared async Telegram notification dispatcher for text and photos.
+- `live_drops.py`: Scrapes upcoming mint events across chains from NFTCalendar.
+- `calendar_tracker.py`: Background scheduler for long-range drop tracking.
+- `commands.py`: Telegram slash command handler (/watch, /live, /unwatch, /list).
+- `floor.py` / `mint.py`: Watchlist floor-price and mint-velocity trackers.
+- `watchlist.py`: Local persistence layer for watched collections.
+- `dedup.py`: Shared memory and daily de-duplication store.
 
 ---
 
-## Roadmap
+## 📄 License
 
-- [x] Pre-mint calendar alerts
-- [x] Live & upcoming mints tracker
-- [x] Telegram commands for watchlist management
-- [ ] Multi-chain support (Solana, Base)
-- [ ] Discord alerts
-- [ ] Web dashboard
-- [ ] Gas price alerts
-- [ ] Wallet activity tracker
+This project is licensed under the MIT License. Feel free to fork, modify, and build on top of it!
 
----
-
-## License
-
-MIT - free to use, modify, and distribute.
-
----
-
-## Contributing
-
-PRs welcome. Open an issue first for major changes.
