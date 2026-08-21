@@ -12,4 +12,8 @@ venv/
 # Private config - never commit this
 private/
 
-watchlist.json.venv/
+watchlist.json
+deployers.json
+*.tmp
+.venv/
+.aider*

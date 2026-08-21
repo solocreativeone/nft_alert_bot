@@ -1,9 +1,17 @@
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env if present
+load_dotenv()
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 OPENSEA_API_KEY = os.environ.get("OPENSEA_API_KEY")
 ALCHEMY_API_KEY = os.environ.get("ALCHEMY_API_KEY")
+GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY")
+
+# Gemini AI filter — skip contracts scoring below this (0 = off, 100 = all blocked)
+GEMINI_MIN_SCORE = int(os.environ.get("GEMINI_MIN_SCORE", 40))
 
 # Collections to watch — add as many as you like
 COLLECTIONS = [

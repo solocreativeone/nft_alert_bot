@@ -1,4 +1,7 @@
-requests
-python-telegram-bot==20.7
-schedule
-python-dotenv
+requests==2.34.2
+python-telegram-bot>=21.0
+schedule==1.2.2
+python-dotenv==1.2.2
+curl_cffi==0.15.0
+beautifulsoup4==4.15.0
+google-genai>=1.0.0
