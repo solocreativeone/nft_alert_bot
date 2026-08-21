@@ -1,8 +1,11 @@
 import json
 import os
 import requests
+import threading
 
 WATCHLIST_FILE = "watchlist.json"
+_watchlist_cache = None
+_lock = threading.Lock()
 
 try:
     from private.config_live import OPENSEA_API_KEY
@@ -11,20 +14,31 @@ except ImportError:
 
 def load_watchlist():
     """Load watchlist from JSON file — persists across restarts."""
-    if os.path.exists(WATCHLIST_FILE):
-        try:
-            with open(WATCHLIST_FILE, "r") as f:
-                return json.load(f)
-        except Exception:
-            return []
-    return []
+    global _watchlist_cache
+    with _lock:
+        if _watchlist_cache is not None:
+            return _watchlist_cache
+
+        if os.path.exists(WATCHLIST_FILE):
+            try:
+                with open(WATCHLIST_FILE, "r") as f:
+                    _watchlist_cache = json.load(f)
+                    return _watchlist_cache
+            except Exception:
+                pass
+        
+        _watchlist_cache = []
+        return _watchlist_cache
 
 def save_watchlist(watchlist):
-    """Save watchlist to JSON file."""
-    with open(WATCHLIST_FILE, "w") as f:
-        json.dump(watchlist, f, indent=2)
+    """Save watchlist to JSON file and update cache."""
+    global _watchlist_cache
+    with _lock:
+        _watchlist_cache = watchlist
+        with open(WATCHLIST_FILE, "w") as f:
+            json.dump(watchlist, f, indent=2)
 
-def lookup_contract(contract_address):
+def lookup_contract(contract_address, chain="ethereum"):
     """
     Look up a contract on OpenSea and return collection details.
     Returns dict with name, slug, floor or None if not found.
@@ -32,7 +46,7 @@ def lookup_contract(contract_address):
     headers = {"x-api-key": OPENSEA_API_KEY}
 
     # Step 1 — get collection slug from contract
-    url = f"https://api.opensea.io/api/v2/chain/ethereum/contract/{contract_address}"
+    url = f"https://api.opensea.io/api/v2/chain/{chain}/contract/{contract_address}"
     res = requests.get(url, headers=headers, timeout=10)
 
     if res.status_code != 200:
@@ -64,13 +78,14 @@ def lookup_contract(contract_address):
     return {
         "name": name,
         "slug": slug,
+        "chain": chain,
         "contract": contract_address.lower(),
         "floor_alert_low": round(floor * 0.8, 4) if floor and floor > 0 else 0.01,
         "floor_alert_high": round(floor * 1.5, 4) if floor and floor > 0 else 1.0,
         "current_floor": floor,
     }
 
-def add_to_watchlist(contract_address):
+def add_to_watchlist(contract_address, chain="ethereum", custom_low=None, custom_high=None):
     """
     Add a contract to the watchlist.
     Returns (success, message) tuple.
@@ -80,13 +95,18 @@ def add_to_watchlist(contract_address):
     # Check if already watching
     contract_lower = contract_address.lower()
     for item in watchlist:
-        if item["contract"] == contract_lower:
-            return False, f"Already watching {item['name']}"
+        if item["contract"] == contract_lower and item.get("chain", "ethereum") == chain:
+            return False, f"Already watching {item['name']} on {chain}"
 
     # Look up on OpenSea
-    col = lookup_contract(contract_address)
+    col = lookup_contract(contract_address, chain)
     if not col:
-        return False, "Could not find collection on OpenSea. Check the contract address."
+        return False, f"Could not find collection on OpenSea for chain {chain}."
+
+    if custom_low is not None:
+        col["floor_alert_low"] = custom_low
+    if custom_high is not None:
+        col["floor_alert_high"] = custom_high
 
     watchlist.append(col)
     save_watchlist(watchlist)
