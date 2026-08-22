@@ -9,7 +9,8 @@ No webhooks, no complex database setups, and zero maintenance.
 > ## 🚧 Project Status: Local Development
 >
 > **This bot is currently run locally only. It is not deployed to any cloud host.**
-> Development and testing happen on local machines (> chosen yet.
+> Development and testing happen on local machines. A hosting target has not been
+> chosen yet.
 >
 > A `railway.toml` is present and Railway instructions are included below, but they
 > are **untested/aspirational**. Treat them as a future option, not the current
