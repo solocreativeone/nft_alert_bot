@@ -54,3 +54,89 @@ def test_badge_legit():
     badge = gemini_filter.verdict_badge({"verdict": "LEGIT", "score": 90, "reason": "clean"})
     assert "Legit" in badge
     assert "90" in badge
+
+
+# ── response normalization ───────────────────────────────────────────────────
+# gemini_score_nft used to do `json.loads(raw)` then index result['verdict'] and
+# result['score'] directly in a print(). A response missing either key raised a
+# KeyError INSIDE the try block, so a perfectly good LEGIT verdict fell through
+# to the generic handler and was discarded as ERROR, suppressing the alert.
+# `response.text` is also None on a safety block / MAX_TOKENS finish, which
+# crashed on .strip().
+
+import asyncio
+
+import pytest
+
+
+def _run_with_response(monkeypatch, text):
+    """Drive gemini_score_nft with a canned model response."""
+    class FakeResponse:
+        pass
+
+    FakeResponse.text = text
+
+    async def fake_generate(client, prompt):
+        return FakeResponse()
+
+    monkeypatch.setattr(gemini_filter, "_rate_limited_generate", fake_generate)
+    monkeypatch.setattr(gemini_filter, "_client", "sentinel-client")
+    monkeypatch.setattr(gemini_filter, "_gemini_cooldown_until", 0.0)
+    gemini_filter._score_cache.clear()
+    return asyncio.run(gemini_score_nft_unique())
+
+
+_counter = {"n": 0}
+
+
+def gemini_score_nft_unique():
+    """Each call uses a fresh contract id so the score cache never interferes."""
+    _counter["n"] += 1
+    return gemini_filter.gemini_score_nft({"contract": f"0xtest{_counter['n']:04d}"})
+
+
+def test_missing_score_key_keeps_verdict(monkeypatch):
+    res = _run_with_response(monkeypatch, '{"verdict":"LEGIT","reason":"ok"}')
+    assert res["verdict"] == "LEGIT", "must not be discarded as ERROR"
+    assert res["score"] == 0
+
+
+def test_score_as_string_is_coerced(monkeypatch):
+    res = _run_with_response(monkeypatch, '{"score":"85","verdict":"LEGIT","reason":"ok"}')
+    assert res["score"] == 85
+    assert gemini_filter.is_worth_alerting(res, min_score=40) is True
+
+
+def test_score_is_clamped_to_range(monkeypatch):
+    res = _run_with_response(monkeypatch, '{"score":9999,"verdict":"LEGIT","reason":"x"}')
+    assert res["score"] == 100
+
+
+def test_verdict_is_uppercased(monkeypatch):
+    res = _run_with_response(monkeypatch, '{"score":70,"verdict":"legit","reason":"x"}')
+    assert res["verdict"] == "LEGIT"
+    assert gemini_filter.is_worth_alerting(res, min_score=40) is True
+
+
+def test_markdown_fenced_json_is_parsed(monkeypatch):
+    res = _run_with_response(
+        monkeypatch, '```json\n{"score":55,"verdict":"SUSPICIOUS","reason":"y"}\n```'
+    )
+    assert res["verdict"] == "SUSPICIOUS"
+    assert res["score"] == 55
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,                              # safety block / MAX_TOKENS
+        "",                                # empty completion
+        "Sure! Here is my analysis.",      # prose instead of JSON
+        "[1,2,3]",                         # valid JSON, wrong shape
+    ],
+)
+def test_unusable_responses_fail_closed(monkeypatch, payload):
+    res = _run_with_response(monkeypatch, payload)
+    assert res["verdict"] == "ERROR"
+    assert res["score"] == 0
+    assert gemini_filter.is_worth_alerting(res, min_score=40) is False

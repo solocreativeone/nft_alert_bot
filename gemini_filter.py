@@ -196,7 +196,10 @@ async def gemini_score_nft(contract_data: dict) -> dict:
 
     try:
         response = await _rate_limited_generate(client, prompt)
-        raw = response.text.strip()
+        raw = (response.text or "").strip()
+        if not raw:
+            # A safety block or MAX_TOKENS finish leaves .text empty/None.
+            raise ValueError("empty response from Gemini")
 
         # Strip accidental markdown fences
         if raw.startswith("```"):
@@ -204,7 +207,24 @@ async def gemini_score_nft(contract_data: dict) -> dict:
             if raw.startswith("json"):
                 raw = raw[4:]
 
-        result = json.loads(raw)
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise ValueError(f"expected a JSON object, got {type(parsed).__name__}")
+
+        # Normalize: a response can legitimately omit or mistype a field. Don't
+        # discard an otherwise-usable verdict over a missing key -- previously any
+        # KeyError here fell through to ERROR and suppressed the alert entirely.
+        verdict = str(parsed.get("verdict") or "UNKNOWN").upper()
+        try:
+            score = int(float(parsed.get("score", 0) or 0))
+        except (TypeError, ValueError):
+            score = 0
+        result = {
+            "score": max(0, min(100, score)),
+            "verdict": verdict,
+            "reason": str(parsed.get("reason") or "").strip(),
+        }
+
         _score_cache[contract] = result
         print(f"[Gemini] 🧠 {clean_payload['collection_name']} ({contract[:10]}...) -> {result['verdict']} ({result['score']}/100)")
         return result
