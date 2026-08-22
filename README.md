@@ -8,11 +8,11 @@ No webhooks, no complex database setups, and zero maintenance.
 
 > ## 🚧 Project Status: Local Development
 >
-> **This bot is currently run locally only — it is not deployed to any cloud host.**
+> **This bot is currently run locally only. It is not deployed to any cloud host.**
 > Development and testing happen on local machines (> chosen yet.
 >
 > A `railway.toml` is present and Railway instructions are included below, but they
-> are **untested/aspirational** — treat them as a future option, not the current
+> are **untested/aspirational**. Treat them as a future option, not the current
 > setup. Because state is in-memory only (see Caveats), each local run starts with
 > an empty dedup store.
 

@@ -64,9 +64,9 @@ def _rasterize_svg(svg_bytes):
     rasterized before sending.
 
     Two backends are tried in order:
-      1. cairosvg — ships as a pure wheel (cairocffi loads libcairo at runtime),
+      1. cairosvg: ships as a pure wheel (cairocffi loads libcairo at runtime),
          so it works on a plain `pip install -r requirements.txt`.
-      2. svglib + reportlab renderPM — fallback. NOTE: reportlab 4.x/5.x wheels
+      2. svglib + reportlab renderPM: fallback. NOTE: reportlab 4.x/5.x wheels
          are pure-Python and no longer bundle the _renderPM C extension, so this
          path raises "cannot import desired renderPM backend rlPyCairo" unless
          rlPyCairo/pycairo is separately compiled. Kept as a secondary in case
