@@ -9,6 +9,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")    # From @BotFather
 CHAT_ID = os.environ.get("CHAT_ID")                  # Your Telegram chat ID
 OPENSEA_API_KEY = os.environ.get("OPENSEA_API_KEY")  # From opensea.io/developers
 ALCHEMY_API_KEY = os.environ.get("ALCHEMY_API_KEY")  # From alchemy.com
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")    # From aistudio.google.com
 
 # Collections to watch
 COLLECTIONS = [
@@ -37,3 +38,8 @@ MINT_COOLDOWN_MINUTES = 10
 MIN_MINTS_THRESHOLD = 5
 FLOOR_COOLDOWN_MINUTES = 30
 MAX_CONTRACT_AGE_HOURS = 48   # Skip drops whose contract was deployed longer ago than this
+
+# Gemini AI filter. Every name imported from this file must exist, because one
+# missing name aborts the whole `from private.config_live import ...` statement
+# and silently falls back to config.py, discarding the keys set above.
+GEMINI_MIN_SCORE = 40         # Suppress drops scoring below this (0 = off)
