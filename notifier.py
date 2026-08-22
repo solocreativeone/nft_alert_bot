@@ -58,11 +58,29 @@ def _looks_like_svg(data: bytes) -> bool:
 
 
 def _rasterize_svg(svg_bytes):
-    """Convert SVG bytes to PNG bytes via svglib + reportlab. None on failure.
+    """Convert SVG bytes to PNG bytes. None on failure.
 
     Telegram's sendPhoto does not accept SVG, so fully-on-chain SVG art must be
     rasterized before sending.
+
+    Two backends are tried in order:
+      1. cairosvg — ships as a pure wheel (cairocffi loads libcairo at runtime),
+         so it works on a plain `pip install -r requirements.txt`.
+      2. svglib + reportlab renderPM — fallback. NOTE: reportlab 4.x/5.x wheels
+         are pure-Python and no longer bundle the _renderPM C extension, so this
+         path raises "cannot import desired renderPM backend rlPyCairo" unless
+         rlPyCairo/pycairo is separately compiled. Kept as a secondary in case
+         it is available.
     """
+    try:
+        import cairosvg
+
+        png = cairosvg.svg2png(bytestring=svg_bytes)
+        if png:
+            return png
+    except Exception as e:
+        print(f"[Image] cairosvg rasterize failed ({e}); trying reportlab")
+
     try:
         from svglib.svglib import svg2rlg
         from reportlab.graphics import renderPM

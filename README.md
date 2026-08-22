@@ -4,7 +4,17 @@
 
 An intelligent, multi-chain NFT crawler and tracker that monitors new collection drops on **Ethereum, Polygon, Base, Arbitrum, Optimism, and Robinhood Chain**, alongside upcoming mint schedules on **NFTCalendar**. It delivers real-time alerts straight to your Telegram DM, complete with high-resolution image previews, on-chain legitimacy scoring by **Gemini AI**, DEX liquidity detection, deployer history tracking, and direct OpenSea/explorer links.
 
-No webhooks, no complex database setups, and zero maintenance. Perfect for running 24/7 on Railway or any VPS.
+No webhooks, no complex database setups, and zero maintenance.
+
+> ## 🚧 Project Status: Local Development
+>
+> **This bot is currently run locally only — it is not deployed to any cloud host.**
+> Development and testing happen on local machines (> chosen yet.
+>
+> A `railway.toml` is present and Railway instructions are included below, but they
+> are **untested/aspirational** — treat them as a future option, not the current
+> setup. Because state is in-memory only (see Caveats), each local run starts with
+> an empty dedup store.
 
 ---
 
@@ -156,7 +166,11 @@ Manage your watchlist directly from Telegram without editing config files:
 
 ---
 
-## ☁️ Deploying to Railway (24/7 Cloud Hosting)
+## ☁️ Deploying to Railway (Optional / Not Currently Used)
+
+> ⚠️ **Not the current setup.** The bot runs locally today (see Project Status at
+> the top). The steps below are an untested future option, kept for whenever a
+> host is chosen.
 
 1. Push this project to your GitHub repository.
 2. Log into [railway.app](https://railway.app) and create a **New Project**.

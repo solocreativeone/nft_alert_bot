@@ -6,4 +6,12 @@ curl_cffi==0.15.0
 beautifulsoup4==4.15.0
 google-genai>=1.0.0
 svglib>=1.5.1
+# SVG->PNG rasterization (fully on-chain SVG art) needs a renderPM backend.
+# reportlab 4.x AND 5.x are pure-Python wheels with NO bundled _renderPM C
+# extension (only <=3.6.13 shipped it), so renderPM raises
+# "cannot import desired renderPM backend rlPyCairo" on a clean install.
+# rlPyCairo pulls pycairo, which has no prebuilt Linux wheels and needs cairo +
+# X11 dev headers to compile. cairosvg is the pure-wheel alternative and is what
+# notifier._rasterize_svg tries first.
 reportlab>=4.0.0
+cairosvg>=2.7.0
