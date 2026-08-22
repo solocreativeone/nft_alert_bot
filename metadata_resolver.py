@@ -19,6 +19,10 @@ IPFS_GATEWAYS = [
     "https://dweb.link/ipfs/",
     "https://gateway.pinata.cloud/ipfs/",
     "https://w3s.link/ipfs/",
+    # Kept last as a backstop: the four above sit behind Cloudflare and can
+    # return a 403 "Just a moment..." challenge from datacenter/mobile IPs, in
+    # which case this one still served the same CIDs fine when tested.
+    "https://ipfs.filebase.io/ipfs/",
 ]
 
 ARWEAVE_GATEWAY = "https://arweave.net/"
@@ -96,6 +100,7 @@ def fetch_metadata_sync(token_uri: str) -> dict:
     else:
         urls_to_try = [resolved_url]
 
+    last_error = ""
     for url in urls_to_try:
         try:
             res = requests.get(
@@ -117,9 +122,22 @@ def fetch_metadata_sync(token_uri: str) -> dict:
                     content_type = res.headers.get("content-type", "").lower()
                     if any(t in content_type for t in ["image/", "svg", "png", "jpeg", "webp"]):
                         return {"image_url": url}
-        except Exception:
+                    last_error = f"200 but unparseable (content-type: {content_type[:40]})"
+            else:
+                last_error = f"HTTP {res.status_code}"
+        except Exception as e:
+            last_error = f"{type(e).__name__}"
             continue
 
+    # Every gateway failed. Log it: a silent empty dict here means an alert goes
+    # out with no name and no image, which looks like a metadata bug rather than
+    # a gateway/network problem. 403 "Just a moment..." means Cloudflare is
+    # challenging this host's IP.
+    if last_error:
+        print(
+            f"[Metadata] ⚠️ All {len(urls_to_try)} source(s) failed for "
+            f"{token_uri[:60]}... (last: {last_error})"
+        )
     return {}
 
 

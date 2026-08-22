@@ -34,9 +34,17 @@ def fetch_dex_screener_sync(contract_address: str) -> dict:
     return {}
 
 
-def parse_dex_data(raw_data: dict) -> dict:
+def parse_dex_data(raw_data: dict, chain: str = "") -> dict:
     """
     Parse DexScreener API payload and extract the best/highest liquidity pair.
+
+    ``chain`` filters pairs to the chain the drop was detected on. DexScreener's
+    /tokens/<address> endpoint returns pairs for the SAME address across EVERY
+    chain it knows, and an address can exist on several chains with unrelated
+    tokens behind it. Without the filter the highest-liquidity pair anywhere wins,
+    so an Ethereum drop can report PulseChain liquidity (confirmed live: USDC's
+    Ethereum address returns 29 PulseChain pairs at $10.7M vs 1 Ethereum pair at
+    $884K). Passing an empty chain keeps the old cross-chain behaviour.
     """
     default_result = {
         "has_liquidity": False,
@@ -57,6 +65,23 @@ def parse_dex_data(raw_data: dict) -> dict:
 
     pairs = raw_data.get("pairs")
     if not pairs or not isinstance(pairs, list):
+        return default_result
+
+    # Keep only pairs on the chain we're actually looking at. DexScreener's
+    # chainId slugs match this bot's EVM_CHAINS keys for every supported chain
+    # (verified live: ethereum, base, polygon, arbitrum, optimism, bsc, avalanche).
+    if chain:
+        want = chain.strip().lower()
+        same_chain = [
+            p
+            for p in pairs
+            if isinstance(p, dict) and str(p.get("chainId", "")).lower() == want
+        ]
+        # If the chain isn't on DexScreener at all (e.g. zora, robinhood), report
+        # no liquidity rather than silently quoting a different chain's pool.
+        pairs = same_chain
+
+    if not pairs:
         return default_result
 
     # Sort pairs by highest liquidity USD
@@ -112,6 +137,9 @@ def parse_dex_data(raw_data: dict) -> dict:
 async def get_dex_liquidity(chain: str, contract_address: str) -> dict:
     """
     Asynchronously query DEX liquidity and pool activity for a token/NFT address.
+
+    Results are restricted to ``chain`` so a drop never reports another chain's
+    liquidity pool.
     """
     raw_data = await asyncio.to_thread(fetch_dex_screener_sync, contract_address)
-    return parse_dex_data(raw_data)
+    return parse_dex_data(raw_data, chain)
