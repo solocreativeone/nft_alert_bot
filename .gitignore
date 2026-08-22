@@ -17,3 +17,8 @@ deployers.json
 *.tmp
 .venv/
 .aider*
+
+# Internal working notes kept LOCAL only. These were deliberately deleted from
+# the public repo (they referenced the office-PC setup and private config
+# thresholds); recovered copies live here and must never be committed again.
+local_docs/
