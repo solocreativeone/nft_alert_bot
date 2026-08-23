@@ -20,37 +20,112 @@ except ImportError:
     print("[Gemini] ⚠️ google-genai not installed - filter disabled")
 
 try:
-    from private.config_live import GEMINI_API_KEY, GEMINI_MIN_SCORE
+    from private.config_live import GEMINI_API_KEY, GEMINI_API_KEYS, GEMINI_MIN_SCORE, GEMINI_DAILY_LIMIT
     print("[Gemini] ✅ Private config loaded")
 except ImportError:
-    from config import GEMINI_API_KEY, GEMINI_MIN_SCORE
+    from config import GEMINI_API_KEY, GEMINI_API_KEYS, GEMINI_MIN_SCORE, GEMINI_DAILY_LIMIT
 
-# ── Client & Rate Limiter ─────────────────────────────────────────────────────
+import checkpoint
 
-_client = None
+# ── Key pool ──────────────────────────────────────────────────────────────────
+# Gemini's free tier caps each key at GEMINI_DAILY_LIMIT requests per DAY (plus a
+# ~15 RPM burst limit). One key alone silences the AI audit for the rest of the
+# day once it runs dry, and because is_worth_alerting() fails CLOSED that also
+# silences every alert. So we hold a pool and rotate to the next usable key
+# whenever the current one hits its quota.
+#
+# Per-key state (daily count + cooldown expiry) is persisted via checkpoint.py
+# keyed on a SHA-256 fingerprint, never the key itself, so a restart does not
+# reset counters and start hammering a key that is already exhausted.
+
+def _build_key_pool():
+    """Ordered, de-duplicated list of configured keys (GEMINI_API_KEY first)."""
+    pool = []
+    for candidate in [GEMINI_API_KEY] + list(GEMINI_API_KEYS or []):
+        if not candidate:
+            continue
+        cleaned = str(candidate).strip()
+        if cleaned and cleaned not in pool:
+            pool.append(cleaned)
+    return pool
+
+
+_key_pool = _build_key_pool()
+_clients: dict = {}          # api_key -> genai.Client
+_active_index = 0
 _last_gemini_call_time = 0.0
 _gemini_lock = asyncio.Lock()
-
-# ── Daily-quota circuit breaker ───────────────────────────────────────────────
-# The free tier is capped at 500 requests per DAY, not just 15 per minute. Once a
-# quota 429 is hit, further calls only 429 again and waste latency — so we stop
-# calling until a cooldown expires, then probe once (hourly for the daily cap,
-# ~1 min for a transient per-minute limit).
-_gemini_cooldown_until = 0.0
-_daily_call_count = 0
-_daily_count_date = None
+_pool_logged = False
 
 
-def _reset_daily_counter_if_new_day():
-    global _daily_call_count, _daily_count_date
-    today = datetime.now(timezone.utc).date()
-    if _daily_count_date != today:
-        _daily_call_count = 0
-        _daily_count_date = today
+def _today() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def _key_state(api_key: str) -> dict:
+    """Persisted state for one key, with the daily counter rolled over if stale."""
+    state = checkpoint.get_gemini_key_state(api_key)
+    if state.get("date") != _today():
+        state = {"date": _today(), "count": 0, "cooldown_until": state.get("cooldown_until", 0.0)}
+    return state
+
+
+def _save_key_state(api_key: str, state: dict, flush_now: bool = False):
+    checkpoint.set_gemini_key_state(
+        api_key,
+        date=state.get("date") or _today(),
+        count=int(state.get("count", 0)),
+        cooldown_until=float(state.get("cooldown_until", 0.0)),
+        flush_now=flush_now,
+    )
+
+
+def _key_is_available(api_key: str, now: float | None = None) -> bool:
+    """A key is usable when it is off cooldown and under its daily cap."""
+    now = time.time() if now is None else now
+    state = _key_state(api_key)
+    if now < float(state.get("cooldown_until", 0.0)):
+        return False
+    if GEMINI_DAILY_LIMIT and int(state.get("count", 0)) >= GEMINI_DAILY_LIMIT:
+        return False
+    return True
+
+
+def _label(api_key: str) -> str:
+    """Short human-readable id for logs. Never prints the key itself."""
+    if not _key_pool:
+        return "none"
+    try:
+        return f"key #{_key_pool.index(api_key) + 1}/{len(_key_pool)}"
+    except ValueError:
+        return "key ?"
+
+
+def select_key(now: float | None = None):
+    """Return the next usable key, rotating past exhausted ones.
+
+    Starts at the currently active key so we stay on it while it still has
+    quota, then walks the pool in order. Returns None when every key is spent,
+    which trips the RATE_LIMITED verdict.
+    """
+    global _active_index
+    if not _key_pool:
+        return None
+    now = time.time() if now is None else now
+    for offset in range(len(_key_pool)):
+        idx = (_active_index + offset) % len(_key_pool)
+        candidate = _key_pool[idx]
+        if _key_is_available(candidate, now):
+            if idx != _active_index:
+                print(f"[Gemini] 🔄 Rotating to {_label(candidate)} "
+                      f"(previous key exhausted or cooling down)")
+                _active_index = idx
+            return candidate
+    return None
 
 
 def _compute_cooldown_seconds(err_str: str) -> float:
-    """Decide how long to pause calls after a 429, honoring retryDelay if given."""
+    """Decide how long to pause a key after a 429, honoring retryDelay if given."""
     retry = 0.0
     m = re.search(r"retryDelay['\"]?\s*[:=]\s*['\"]?(\d+)", err_str)
     if m:
@@ -63,29 +138,46 @@ def _compute_cooldown_seconds(err_str: str) -> float:
     return max(retry, 60.0)
 
 
-def _trip_cooldown(err_str: str) -> float:
-    global _gemini_cooldown_until
+def _trip_cooldown(err_str: str, api_key: str | None = None) -> float:
+    """Park ONE key on cooldown. Other keys in the pool stay usable."""
     cooldown = _compute_cooldown_seconds(err_str)
-    _gemini_cooldown_until = time.time() + cooldown
+    target = api_key if api_key is not None else (_key_pool[_active_index] if _key_pool else None)
+    if target:
+        state = _key_state(target)
+        state["cooldown_until"] = time.time() + cooldown
+        # A daily-quota 429 means this key is done for the day regardless of
+        # what our local counter says (it may have been used elsewhere).
+        if "PerDay" in err_str or "per day" in err_str.lower():
+            state["count"] = max(int(state.get("count", 0)), GEMINI_DAILY_LIMIT or 0)
+        _save_key_state(target, state, flush_now=True)
     return cooldown
 
 
-def get_client():
-    """Lazy-init the Gemini client on first use."""
-    global _client
-    if _client is None:
-        if not GEMINI_AVAILABLE:
-            return None
-        if not GEMINI_API_KEY:
-            print("[Gemini] ⚠️ GEMINI_API_KEY not set - filter disabled")
-            return None
-        _client = genai.Client(api_key=GEMINI_API_KEY)
-        print("[Gemini] ✅ gemini-3.5-flash-lite ready")
-    return _client
+def get_client(api_key: str | None = None):
+    """Return a client for the given key (or the next usable one), caching per key."""
+    global _pool_logged
+    if not GEMINI_AVAILABLE:
+        return None
+    if not _key_pool:
+        print("[Gemini] ⚠️ No Gemini API key configured - filter disabled")
+        return None
 
-async def _rate_limited_generate(client, prompt: str):
-    """Ensure Gemini free-tier rate limit (15 RPM -> 4.0s interval) is respected."""
-    global _last_gemini_call_time, _daily_call_count
+    if not _pool_logged:
+        print(f"[Gemini] ✅ gemini-3.5-flash-lite ready ({len(_key_pool)} key(s) in pool, "
+              f"{GEMINI_DAILY_LIMIT}/day each)")
+        _pool_logged = True
+
+    key = api_key or select_key()
+    if not key:
+        return None
+    if key not in _clients:
+        _clients[key] = genai.Client(api_key=key)
+    return _clients[key]
+
+
+async def _rate_limited_generate(client, prompt: str, api_key: str | None = None):
+    """Respect the free-tier burst limit (15 RPM -> 4.0s interval) and count usage."""
+    global _last_gemini_call_time
     async with _gemini_lock:
         now = time.time()
         elapsed = now - _last_gemini_call_time
@@ -93,8 +185,10 @@ async def _rate_limited_generate(client, prompt: str):
             await asyncio.sleep(4.0 - elapsed)
         _last_gemini_call_time = time.time()
 
-        _reset_daily_counter_if_new_day()
-        _daily_call_count += 1
+        if api_key:
+            state = _key_state(api_key)
+            state["count"] = int(state.get("count", 0)) + 1
+            _save_key_state(api_key, state)
 
         def _call():
             return client.models.generate_content(
@@ -103,6 +197,28 @@ async def _rate_limited_generate(client, prompt: str):
             )
 
         return await asyncio.to_thread(_call)
+
+
+def pool_status() -> dict:
+    """Snapshot of every key's quota usage. Fingerprints only, never raw keys."""
+    now = time.time()
+    keys = []
+    for idx, key in enumerate(_key_pool):
+        state = _key_state(key)
+        keys.append({
+            "index": idx + 1,
+            "fingerprint": checkpoint.fingerprint(key),
+            "used_today": int(state.get("count", 0)),
+            "limit": GEMINI_DAILY_LIMIT,
+            "cooling_down": now < float(state.get("cooldown_until", 0.0)),
+            "available": _key_is_available(key, now),
+            "active": idx == _active_index,
+        })
+    return {
+        "total_keys": len(_key_pool),
+        "available_keys": sum(1 for k in keys if k["available"]),
+        "keys": keys,
+    }
 
 # ── Score cache ───────────────────────────────────────────────────────────────
 
@@ -156,20 +272,36 @@ async def gemini_score_nft(contract_data: dict) -> dict:
 
     client = get_client()
     if client is None:
+        # No key configured at all vs. every key exhausted are different states:
+        # the former means the filter is intentionally off (UNKNOWN passes), the
+        # latter means we could not vet this drop (RATE_LIMITED blocks).
+        if _key_pool and select_key() is None:
+            return {
+                "score": 0,
+                "verdict": "RATE_LIMITED",
+                "reason": "AI audit paused — all Gemini keys have reached their daily quota.",
+            }
         return {
             "score": 50,
             "verdict": "UNKNOWN",
             "reason": "Gemini filter disabled or unconfigured."
         }
 
-    # ── Circuit breaker: skip the call entirely while quota is exhausted ──
-    # Returns a blocking verdict (RATE_LIMITED) so we stay quiet instead of
-    # flooding alerts with unscored drops once the daily cap is hit.
-    if time.time() < _gemini_cooldown_until:
+    # Rotate to whichever key still has quota. None means the whole pool is spent,
+    # so we return a blocking verdict instead of flooding unscored drops.
+    active_key = select_key()
+    if active_key is None:
         return {
             "score": 0,
             "verdict": "RATE_LIMITED",
-            "reason": "AI audit paused — Gemini daily quota reached.",
+            "reason": "AI audit paused — all Gemini keys have reached their daily quota.",
+        }
+    client = get_client(active_key)
+    if client is None:
+        return {
+            "score": 0,
+            "verdict": "RATE_LIMITED",
+            "reason": "AI audit paused — no usable Gemini key.",
         }
 
     # Prepare cleaned payload to stay compact and informative
@@ -194,58 +326,88 @@ async def gemini_score_nft(contract_data: dict) -> dict:
 
     prompt = f"{_PROMPT}\n\nContract Data:\n{json.dumps(clean_payload, indent=2)}"
 
-    try:
-        response = await _rate_limited_generate(client, prompt)
-        raw = (response.text or "").strip()
-        if not raw:
-            # A safety block or MAX_TOKENS finish leaves .text empty/None.
-            raise ValueError("empty response from Gemini")
-
-        # Strip accidental markdown fences
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-
-        parsed = json.loads(raw)
-        if not isinstance(parsed, dict):
-            raise ValueError(f"expected a JSON object, got {type(parsed).__name__}")
-
-        # Normalize: a response can legitimately omit or mistype a field. Don't
-        # discard an otherwise-usable verdict over a missing key -- previously any
-        # KeyError here fell through to ERROR and suppressed the alert entirely.
-        verdict = str(parsed.get("verdict") or "UNKNOWN").upper()
+    # Try the active key, then rotate through any remaining keys on a quota 429.
+    # A per-minute 429 on key A can often be served immediately by key B, so a
+    # rotation retry keeps the audit alive instead of dropping the contract.
+    attempts = max(1, len(_key_pool))
+    last_err = ""
+    for attempt in range(attempts):
         try:
-            score = int(float(parsed.get("score", 0) or 0))
-        except (TypeError, ValueError):
-            score = 0
-        result = {
-            "score": max(0, min(100, score)),
-            "verdict": verdict,
-            "reason": str(parsed.get("reason") or "").strip(),
-        }
+            response = await _rate_limited_generate(client, prompt, api_key=active_key)
+            raw = (response.text or "").strip()
+            if not raw:
+                # A safety block or MAX_TOKENS finish leaves .text empty/None.
+                raise ValueError("empty response from Gemini")
 
-        _score_cache[contract] = result
-        print(f"[Gemini] 🧠 {clean_payload['collection_name']} ({contract[:10]}...) -> {result['verdict']} ({result['score']}/100)")
-        return result
+            # Strip accidental markdown fences
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
 
-    except Exception as e:
-        err_str = str(e)
-        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-            cooldown = _trip_cooldown(err_str)
-            print(f"[Gemini] ⛔ Quota hit after {_daily_call_count} call(s) today — "
-                  f"pausing AI audits for ~{round(cooldown / 60)} min")
-            return {
-                "score": 0,
-                "verdict": "RATE_LIMITED",
-                "reason": "AI audit paused — Gemini quota reached.",
+            parsed = json.loads(raw)
+            if not isinstance(parsed, dict):
+                raise ValueError(f"expected a JSON object, got {type(parsed).__name__}")
+
+            # Normalize: a response can legitimately omit or mistype a field. Don't
+            # discard an otherwise-usable verdict over a missing key -- previously any
+            # KeyError here fell through to ERROR and suppressed the alert entirely.
+            verdict = str(parsed.get("verdict") or "UNKNOWN").upper()
+            try:
+                score = int(float(parsed.get("score", 0) or 0))
+            except (TypeError, ValueError):
+                score = 0
+            result = {
+                "score": max(0, min(100, score)),
+                "verdict": verdict,
+                "reason": str(parsed.get("reason") or "").strip(),
             }
-        print(f"[Gemini] ⚠️ Scoring failed for {contract[:10]}...: {err_str[:100]}")
-        return {
-            "score": 0,
-            "verdict": "ERROR",
-            "reason": "AI audit failed — alert suppressed to avoid unvetted drops.",
-        }
+
+            _score_cache[contract] = result
+            print(f"[Gemini] 🧠 {clean_payload['collection_name']} ({contract[:10]}...) -> {result['verdict']} ({result['score']}/100)")
+            return result
+
+        except Exception as e:
+            err_str = str(e)
+            last_err = err_str
+            is_quota = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
+            if not is_quota:
+                print(f"[Gemini] ⚠️ Scoring failed for {contract[:10]}...: {err_str[:100]}")
+                return {
+                    "score": 0,
+                    "verdict": "ERROR",
+                    "reason": "AI audit failed — alert suppressed to avoid unvetted drops.",
+                }
+
+            # Quota hit: park this key, then try the next one that still has room.
+            cooldown = _trip_cooldown(err_str, api_key=active_key)
+            used = _key_state(active_key).get("count", 0)
+            print(f"[Gemini] ⛔ Quota hit on {_label(active_key)} after {used} call(s) today — "
+                  f"cooling it down for ~{round(cooldown / 60)} min")
+
+            next_key = select_key()
+            if next_key is None or next_key == active_key or attempt == attempts - 1:
+                print("[Gemini] ⛔ All Gemini keys exhausted — pausing AI audits")
+                return {
+                    "score": 0,
+                    "verdict": "RATE_LIMITED",
+                    "reason": "AI audit paused — all Gemini keys have reached their quota.",
+                }
+            active_key = next_key
+            client = get_client(active_key)
+            if client is None:
+                return {
+                    "score": 0,
+                    "verdict": "RATE_LIMITED",
+                    "reason": "AI audit paused — no usable Gemini key.",
+                }
+
+    print(f"[Gemini] ⚠️ Scoring exhausted all keys for {contract[:10]}...: {last_err[:100]}")
+    return {
+        "score": 0,
+        "verdict": "RATE_LIMITED",
+        "reason": "AI audit paused — all Gemini keys have reached their quota.",
+    }
 
 
 def is_worth_alerting(result: dict, min_score: int = GEMINI_MIN_SCORE) -> bool:

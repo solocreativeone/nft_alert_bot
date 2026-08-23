@@ -76,12 +76,21 @@ def _run_with_response(monkeypatch, text):
 
     FakeResponse.text = text
 
-    async def fake_generate(client, prompt):
+    async def fake_generate(client, prompt, api_key=None):
         return FakeResponse()
 
     monkeypatch.setattr(gemini_filter, "_rate_limited_generate", fake_generate)
-    monkeypatch.setattr(gemini_filter, "_client", "sentinel-client")
-    monkeypatch.setattr(gemini_filter, "_gemini_cooldown_until", 0.0)
+    # A single-key pool with a live client, so select_key() returns a usable key
+    # and get_client() short-circuits to the sentinel instead of calling genai.
+    monkeypatch.setattr(gemini_filter, "_key_pool", ["test-key"])
+    monkeypatch.setattr(gemini_filter, "_clients", {"test-key": "sentinel-client"})
+    monkeypatch.setattr(gemini_filter, "_active_index", 0)
+    monkeypatch.setattr(gemini_filter, "_key_is_available", lambda key, now=None: True)
+    monkeypatch.setattr(gemini_filter, "_save_key_state", lambda *a, **k: None)
+    monkeypatch.setattr(
+        gemini_filter, "_key_state",
+        lambda key: {"date": "", "count": 0, "cooldown_until": 0.0},
+    )
     gemini_filter._score_cache.clear()
     return asyncio.run(gemini_score_nft_unique())
 

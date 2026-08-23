@@ -10,6 +10,17 @@ OPENSEA_API_KEY = os.environ.get("OPENSEA_API_KEY")
 ALCHEMY_API_KEY = os.environ.get("ALCHEMY_API_KEY")
 GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY")
 
+# Additional Gemini keys for quota rotation. Each free-tier key is capped per day,
+# so the bot rotates to the next usable key when one is exhausted. Supply a
+# comma-separated list; GEMINI_API_KEY is always tried first.
+GEMINI_API_KEYS = [
+    k.strip() for k in os.environ.get("GEMINI_API_KEYS", "").split(",") if k.strip()
+]
+
+# Requests allowed per key per UTC day before the bot rotates away from it.
+# Matches the free-tier gemini-flash-lite allowance; raise it for paid keys.
+GEMINI_DAILY_LIMIT = int(os.environ.get("GEMINI_DAILY_LIMIT", 500))
+
 # Gemini AI filter — skip contracts scoring below this (0 = off, 100 = all blocked)
 GEMINI_MIN_SCORE = int(os.environ.get("GEMINI_MIN_SCORE", 40))
 

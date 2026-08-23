@@ -11,6 +11,17 @@ OPENSEA_API_KEY = os.environ.get("OPENSEA_API_KEY")  # From opensea.io/developer
 ALCHEMY_API_KEY = os.environ.get("ALCHEMY_API_KEY")  # From alchemy.com
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")    # From aistudio.google.com
 
+# Extra Gemini keys for daily-quota rotation. Each free-tier key allows roughly
+# 500 requests per UTC day; when one is exhausted the bot rotates to the next.
+# Create additional keys under different Google accounts at aistudio.google.com.
+GEMINI_API_KEYS = [
+    # "AIza...second-key",
+    # "AIza...third-key",
+]
+
+# Requests per key per UTC day before rotating away from it (free tier = 500).
+GEMINI_DAILY_LIMIT = 500
+
 # Collections to watch
 COLLECTIONS = [
     {
