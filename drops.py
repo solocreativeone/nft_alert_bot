@@ -1,7 +1,9 @@
 import asyncio
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from typing import Optional
 import requests
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -188,10 +190,18 @@ EVM_CHAINS = {
     },
 }
 
-# ── Alchemy premium RPC wiring ───────────────────────────────────────────────
-# Public RPCs throttle eth_getLogs and cap block ranges, making mainnet detection
-# unreliable. When an Alchemy key is configured, prepend Alchemy as the preferred
-# endpoint for the chains it supports (public RPCs stay as fallback).
+# ── RPC endpoint health probing ───────────────────────────────────────────────
+# Endpoint order is a latency preference, but a preference is worthless if the
+# preferred endpoint cannot answer. Three failure modes were live in production
+# and all three cost a full timeout before failover, every cycle:
+#
+#   HTTP 429  Alchemy monthly capacity exhausted   (ethereum, base, arbitrum)
+#   HTTP 403  network not enabled for the app      (polygon, optimism)
+#   HTTP 500  provider broken                      (mainnet.base.org, mainnet.optimism.io)
+#
+# So ordering is decided by a one-off health probe at startup rather than by
+# configuration. Unhealthy endpoints are demoted to the back rather than dropped,
+# so a transient failure at startup cannot permanently lose an endpoint.
 _ALCHEMY_SUBDOMAINS = {
     "ethereum": "eth-mainnet",
     "base": "base-mainnet",
@@ -200,24 +210,174 @@ _ALCHEMY_SUBDOMAINS = {
     "optimism": "opt-mainnet",
 }
 
+PROBE_TIMEOUT = 6
+# Hard wall-clock cap on the whole startup probe. requests' `timeout` is an
+# inter-byte read timeout, not a total duration, so a provider that dribbles a
+# 15k-log response back can hold a single probe open far longer (38.7s observed).
+# Probing serially cost 390s of startup, delaying the first scan by 6.5 minutes.
+PROBE_TOTAL_BUDGET = 45
+PROBE_CONCURRENCY = 12
 
-def _wire_alchemy_rpcs():
+
+def probe_rpc_endpoint(url: str, timeout: int = PROBE_TIMEOUT,
+                       block_step: Optional[int] = None) -> bool:
+    """Return True only if the endpoint can serve the query the bot actually makes.
+
+    Probes eth_getLogs, not eth_blockNumber. That distinction matters: both
+    mainnet.base.org and mainnet.optimism.io answer eth_blockNumber with HTTP 200
+    and then fail eth_getLogs with "backend response too large" (base took 50.9s
+    to do it). A liveness check on the cheap method promotes exactly the endpoints
+    that cannot do the work.
+
+    Deliberately strict: a 200 carrying a JSON-RPC error body is a failure, since
+    providers signal quota and range limits that way.
+    """
+    if not url or "YOUR_KEY" in url:
+        return False
+
+    step = block_step if block_step else 30
+    try:
+        res = requests.post(
+            url,
+            json={"jsonrpc": "2.0", "id": 1, "method": "eth_blockNumber", "params": []},
+            timeout=timeout,
+        )
+        if res.status_code != 200:
+            return False
+        tip = int(res.json()["result"], 16)
+    except Exception:
+        return False
+
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_getLogs",
+        "params": [{
+            "fromBlock": hex(max(tip - step, 0)),
+            "toBlock": hex(tip),
+            "topics": [ERC721_TRANSFER_TOPIC],
+        }],
+    }
+    try:
+        res = requests.post(url, json=payload, timeout=timeout)
+        if res.status_code != 200:
+            return False
+        data = res.json()
+    except Exception:
+        return False
+    if not isinstance(data, dict) or "error" in data:
+        return False
+    return isinstance(data.get("result"), list)
+
+
+def reorder_rpcs_by_health(rpcs, probe=probe_rpc_endpoint, block_step: Optional[int] = None,
+                           health=None):
+    """Put endpoints that answer first, preserving relative order within each group.
+
+    Deduplicates. Unhealthy endpoints are kept as last-resort fallbacks, and if
+    nothing answers the original list is returned unchanged: a suboptimal order
+    is still better than having no endpoints at all.
+
+    `health` accepts a precomputed {url: bool} map so callers can probe every
+    chain concurrently and reuse the results here.
+    """
+    seen = set()
+    unique = []
+    for url in rpcs:
+        if url not in seen:
+            seen.add(url)
+            unique.append(url)
+
+    def is_healthy(url):
+        if health is not None:
+            return health.get(url, False)
+        try:
+            return probe(url, block_step=block_step)
+        except TypeError:
+            return probe(url)
+
+    healthy, unhealthy = [], []
+    for url in unique:
+        (healthy if is_healthy(url) else unhealthy).append(url)
+
+    if not healthy:
+        print("[Drops] ⚠️  No RPC endpoint passed the health probe; keeping configured order")
+        return unique
+    return healthy + unhealthy
+
+
+def wire_healthy_rpcs(chains=None, probe=probe_rpc_endpoint,
+                      budget: int = PROBE_TOTAL_BUDGET):
+    """Probe every chain's endpoints concurrently at startup and order by what works.
+
+    Adds the Alchemy URL as a candidate when a key is configured, but it has to
+    pass the same probe as everything else to earn first position. If the key
+    later starts working, a restart promotes it automatically.
+
+    Probes run in parallel under a hard wall-clock budget: endpoint health is
+    transient (mainnet.optimism.io failed and then passed 20 minutes later), so
+    this is a best-effort startup optimization, not a correctness guarantee. The
+    per-request failover in direct_rpc_post remains the actual safety net, which
+    is why an unfinished probe is safe to abandon.
+    """
+    targets = list(EVM_CHAINS.keys()) if chains is None else chains
     key = (ALCHEMY_API_KEY or "").strip()
-    if not key or "YOUR_KEY" in key:
-        return
-    wired = []
-    for chain, subdomain in _ALCHEMY_SUBDOMAINS.items():
-        if chain in EVM_CHAINS:
-            endpoint = f"https://{subdomain}.g.alchemy.com/v2/{key}"
-            rpcs = EVM_CHAINS[chain]["rpcs"]
-            if endpoint not in rpcs:
-                EVM_CHAINS[chain]["rpcs"] = [endpoint] + rpcs
-                wired.append(chain)
-    if wired:
-        print(f"[Drops] ✅ Alchemy RPCs wired for: {', '.join(wired)}")
+    use_alchemy = bool(key) and "YOUR_KEY" not in key
 
+    candidates = {}
+    for chain in targets:
+        cfg = EVM_CHAINS.get(chain)
+        if not cfg:
+            continue
+        urls = list(cfg["rpcs"])
+        if use_alchemy and chain in _ALCHEMY_SUBDOMAINS:
+            alchemy_url = f"https://{_ALCHEMY_SUBDOMAINS[chain]}.g.alchemy.com/v2/{key}"
+            if alchemy_url not in urls:
+                urls.insert(0, alchemy_url)
+        candidates[chain] = urls
 
-_wire_alchemy_rpcs()
+    jobs = {url: EVM_CHAINS[chain].get("block_step")
+            for chain, urls in candidates.items() for url in urls}
+
+    health = {}
+    deadline = time.monotonic() + budget
+    with ThreadPoolExecutor(max_workers=PROBE_CONCURRENCY) as pool:
+        futures = {}
+        for url, step in jobs.items():
+            try:
+                futures[pool.submit(probe, url, block_step=step)] = url
+            except TypeError:
+                futures[pool.submit(probe, url)] = url
+        for future in as_completed(futures, timeout=None):
+            url = futures[future]
+            try:
+                health[url] = bool(future.result(timeout=0))
+            except Exception:
+                # Could not determine health: treat as untested rather than
+                # unhealthy, so a probe error cannot demote a working endpoint.
+                health[url] = None
+            if time.monotonic() > deadline:
+                break
+
+    unprobed = [u for u in jobs if u not in health]
+    if unprobed:
+        print(f"[Drops] ⏱  probe budget {budget}s reached; {len(unprobed)} endpoint(s) "
+              f"left unprobed and keep their configured position")
+        for url in unprobed:
+            health[url] = None
+
+    for chain, urls in candidates.items():
+        tested = [u for u in urls if health.get(u) is not None]
+        if not tested:
+            EVM_CHAINS[chain]["rpcs"] = urls
+            continue
+        # Endpoints we never got to are treated as untested, not unhealthy, so a
+        # budget cutoff cannot demote a good endpoint below a known-bad one.
+        merged = {u: health.get(u) is not False for u in urls}
+        ordered = reorder_rpcs_by_health(urls, health=merged)
+        EVM_CHAINS[chain]["rpcs"] = ordered
+        first = "alchemy" if "alchemy" in ordered[0] else ordered[0].split("//")[-1][:28]
+        print(f"[Drops] RPC {chain}: preferring {first}")
 
 
 ALL_SUPPORTED_CHAINS = list(EVM_CHAINS.keys())

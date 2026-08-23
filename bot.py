@@ -2,7 +2,7 @@ import asyncio
 from telegram.ext import Application
 from floor import check_floors
 from mint import check_mints
-from drops import check_drops
+from drops import check_drops, wire_healthy_rpcs
 from solana_drops import check_solana_drops
 from btc_ordinals import check_btc_ordinals
 from commands import build_app
@@ -43,6 +43,10 @@ async def loop_task(interval_minutes, task_func):
             print(f"[Loop Error] Failed in {task_func.__name__}: {e}")
 
 async def main():
+    # Order RPC endpoints by what actually responds before any scanning starts.
+    # Runs off-thread because probing every chain is blocking network I/O.
+    await asyncio.to_thread(wire_healthy_rpcs)
+
     # Build Telegram App
     app = build_app()
 
