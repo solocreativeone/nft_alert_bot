@@ -159,7 +159,21 @@ def load(path: str | None = None, force: bool = False) -> dict:
 
 
 def _install_hooks():
-    """Flush on interpreter exit and on SIGTERM/SIGINT."""
+    """Flush on interpreter exit and on SIGTERM/SIGINT.
+
+    Signal semantics matter here. The handler's only job is to persist state and
+    then let the signal do what it would normally have done:
+
+    - A previously installed callable handler is delegated to, so we chain rather
+      than clobber whatever the host application set up.
+    - SIG_IGN is respected: if the process was deliberately ignoring the signal,
+      we flush and carry on.
+    - SIG_DFL is restored and the signal re-raised at ourselves, so the process
+      dies with the correct exit status. Raising KeyboardInterrupt instead (an
+      earlier version of this function) was wrong: SIGTERM is a termination
+      request, not an interrupt, and raising from inside a running event loop
+      surfaced a spurious traceback on every clean shutdown.
+    """
     global _hooks_installed
     if _hooks_installed:
         return
@@ -173,9 +187,13 @@ def _install_hooks():
             def _handler(signum, frame, _previous=previous):
                 flush(force=True)
                 if callable(_previous):
-                    _previous(signum, frame)
-                else:
-                    raise KeyboardInterrupt
+                    return _previous(signum, frame)
+                if _previous == signal.SIG_IGN:
+                    return None
+                # SIG_DFL: reinstate it and let the signal terminate us normally.
+                signal.signal(signum, signal.SIG_DFL)
+                os.kill(os.getpid(), signum)
+                return None
 
             signal.signal(sig, _handler)
         except (ValueError, OSError):
