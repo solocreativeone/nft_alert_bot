@@ -788,8 +788,14 @@ async def get_contract_token_uri(chain: str, contract_address: str):
 # wrong 4-byte value can collide with an unrelated function and return a bogus
 # number that reads as a real cap, which would silently suppress live drops.
 # Verified live: BAYC exposes MAX_APES, Pudgy Penguins exposes MAX_ELEMENTS,
-# Doodles exposes MAX_SUPPLY. ERC721A collections (Azuki, Moonbirds, Milady)
-# expose no cap getter at all and correctly fall through to "unknown".
+# Doodles exposes MAX_SUPPLY. ERC721A collections (Azuki, Moonbirds, Milady) and
+# MAYC expose no cap getter at all and correctly fall through to "unknown".
+#
+# KNOWN LIMITATION: a collection can be sold out in reality while publishing no
+# cap on-chain (MAYC is 19,569 minted with no readable cap of any kind). Those
+# stay alertable. That is deliberate - the alternative is inferring a cap from
+# stalled mint activity, which would suppress genuine slow-minting drops. The
+# true-age gate (MAX_CONTRACT_AGE_HOURS) already filters most of these out.
 SUPPLY_SELECTORS = [
     ("totalSupply", "0x18160ddd"),
     ("totalMinted", "0xa2309ff8"),

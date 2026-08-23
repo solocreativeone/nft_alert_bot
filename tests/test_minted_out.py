@@ -278,3 +278,16 @@ def test_live_verified_selectors_match_probe_results():
     assert caps["MAX_APES"] == "0xbb8a16bd"        # BAYC, confirmed live
     assert caps["MAX_ELEMENTS"] == "0x3502a716"    # Pudgy, confirmed live
     assert caps["MAX_SUPPLY"] == "0x32cb6b0c"      # Doodles, confirmed live
+
+
+def test_mayc_style_no_cap_getter_fails_open(monkeypatch):
+    """Verified live: MAYC has 19,569 minted and exposes NO cap getter.
+
+    Sold out in reality, undetectable on-chain. Documented limitation: it stays
+    alertable rather than being blocked on inferred data.
+    """
+    _stub_calls(monkeypatch, {TOTAL_SUPPLY: 19_569})
+    info = asyncio.run(drops.get_supply_info("ethereum", "0xmayc"))
+    assert info["is_minted_out"] is False
+    assert info["max_supply"] is None
+    assert info["minted"] == 19_569

@@ -35,6 +35,8 @@ CASES = [
      "Doodles (sold out, cap via MAX_SUPPLY)", True, True),
     ("0xED5AF388653567Af2F388E6224dC7C4b3241C544",
      "Azuki (ERC721A, no cap getter - must fail OPEN)", False, False),
+    ("0x60E4d786628Fea6478F785A6d7e704777c86a7c6",
+     "Mutant Ape Yacht Club (sold out but NO on-chain cap - must fail OPEN)", False, False),
     ("0xc36442b4a4522e871399cd717abdd847ab11fe88",
      "Uniswap V3 Positions (uncapped - must fail OPEN)", False, False),
 ]
