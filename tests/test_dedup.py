@@ -1,9 +1,18 @@
+import checkpoint
 import dedup
 
 
 def _clear():
+    """Reset both the in-memory store and its persistent backing.
+
+    already_alerted() consults the checkpoint store as well, so clearing only the
+    in-memory set would leave keys from a previous test visible.
+    """
     dedup._alerted = set()
     dedup._alerted_order = dedup.deque(maxlen=dedup.MAX_ALERTED)
+    checkpoint._state = None
+    checkpoint._seen_order = {}
+    checkpoint._dirty = False
 
 
 def test_mark_and_check():

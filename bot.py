@@ -6,6 +6,7 @@ from drops import check_drops, wire_healthy_rpcs
 from solana_drops import check_solana_drops
 from btc_ordinals import check_btc_ordinals
 from commands import build_app
+import checkpoint
 
 # Use private config if available (local dev), fall back to public config
 try:
@@ -24,7 +25,7 @@ print(f"   Mint checks:       every {MINT_CHECK_INTERVAL} minute(s)")
 print(f"   EVM Drop checks:   every {DROPS_CHECK_INTERVAL} minutes")
 print(f"   Solana Drop checks:every {SOLANA_DROPS_CHECK_INTERVAL} minutes")
 print(f"   Bitcoin Ordinals:  every {BTC_CHECK_INTERVAL} minutes")
-print(f"   Commands:          /watch  /unwatch  /list  /help")
+print(f"   Commands:          /watch  /unwatch  /list  /status  /help")
 print("─" * 40)
 
 async def loop_task(interval_minutes, task_func):
@@ -43,6 +44,10 @@ async def loop_task(interval_minutes, task_func):
             print(f"[Loop Error] Failed in {task_func.__name__}: {e}")
 
 async def main():
+    # Load persistent scan state before any scanner runs so every watermark and
+    # processed-mint set resumes from where the last run stopped.
+    checkpoint.load()
+
     # Order RPC endpoints by what actually responds before any scanning starts.
     # Runs off-thread because probing every chain is blocking network I/O.
     await asyncio.to_thread(wire_healthy_rpcs)
@@ -63,7 +68,7 @@ async def main():
     await app.start()
     
     print("[Commands] ✅ Telegram command listener started")
-    print("[Commands]    /start  /watch  /unwatch  /list  /live  /help")
+    print("[Commands]    /start  /watch  /unwatch  /list  /live  /status  /help")
     
     # Wait indefinitely
     await asyncio.Event().wait()
@@ -72,4 +77,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
+        # Persist progress so a Ctrl-C restart resumes instead of re-scanning.
+        checkpoint.flush(force=True)
         print("Bot stopped.")

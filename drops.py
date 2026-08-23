@@ -13,6 +13,7 @@ from deployer_cache import get_contract_creator, get_contract_creation_info, is_
 from dex_liquidity import get_dex_liquidity
 from ethos import get_ethos_profile_async, format_telegram_ethos_badge
 from metadata_resolver import resolve_metadata_async
+import checkpoint
 
 try:
     from private.config_live import ALCHEMY_API_KEY, MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE, MAX_CONTRACT_AGE_HOURS
@@ -21,8 +22,10 @@ except ImportError as e:
     print(f"[Drops] ❌ ImportError: {e}")
     from config import ALCHEMY_API_KEY, MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE, MAX_CONTRACT_AGE_HOURS
 
-# Track contracts we've already alerted on with bounded cache
+# Track contracts we've already alerted on with bounded cache. The in-memory pair
+# is a fast path; checkpoint.py holds the durable copy that survives restarts.
 MAX_ALERTED_CONTRACTS = 10000
+SEEN_EVM = "evm_contracts"
 alerted_contracts_set = set()
 alerted_contracts_deque = deque(maxlen=MAX_ALERTED_CONTRACTS)
 
@@ -381,7 +384,15 @@ def wire_healthy_rpcs(chains=None, probe=probe_rpc_endpoint,
 
 
 ALL_SUPPORTED_CHAINS = list(EVM_CHAINS.keys())
-last_checked_blocks = {chain: None for chain in ALL_SUPPORTED_CHAINS}
+
+# Block watermarks resume from the persistent checkpoint. Previously this dict was
+# seeded with None on every import, so each restart re-seeded from the current
+# chain tip: any blocks produced while the bot was down were skipped entirely, and
+# the freshly-scanned window re-alerted contracts whose in-memory dedup set had
+# just been wiped. Loading from disk fixes both directions.
+last_checked_blocks = {
+    chain: checkpoint.get_block(chain) for chain in ALL_SUPPORTED_CHAINS
+}
 
 
 def direct_rpc_post(chain: str, payload: dict):
@@ -765,6 +776,127 @@ async def get_contract_token_uri(chain: str, contract_address: str):
     return ""
 
 
+# ── Minted-out detection ─────────────────────────────────────────────────────
+# A collection that has already sold out is not actionable: by the time we alert,
+# there is nothing left to mint. We compare the supply already minted against the
+# collection's declared cap via eth_call. Contracts vary wildly in which getters
+# they expose, so we try the common ones and treat "no cap found" as "unknown"
+# rather than "minted out" (never block a drop on missing data).
+#
+# Every selector below was derived with Keccak-256 and cross-checked against the
+# already-trusted name()/symbol() selectors. Do NOT add a guessed selector: a
+# wrong 4-byte value can collide with an unrelated function and return a bogus
+# number that reads as a real cap, which would silently suppress live drops.
+# Verified live: BAYC exposes MAX_APES, Pudgy Penguins exposes MAX_ELEMENTS,
+# Doodles exposes MAX_SUPPLY. ERC721A collections (Azuki, Moonbirds, Milady)
+# expose no cap getter at all and correctly fall through to "unknown".
+SUPPLY_SELECTORS = [
+    ("totalSupply", "0x18160ddd"),
+    ("totalMinted", "0xa2309ff8"),
+]
+MAX_SUPPLY_SELECTORS = [
+    ("maxSupply", "0xd5abeb01"),
+    ("MAX_SUPPLY", "0x32cb6b0c"),
+    ("maxTotalSupply", "0x2ab4d052"),
+    ("MAX_TOKENS", "0xf47c84c5"),
+    ("collectionSize", "0x45c0f533"),
+    ("MAX_ELEMENTS", "0x3502a716"),
+    ("MAX_NFT_SUPPLY", "0xb5077f44"),
+    ("MAX_APES", "0xbb8a16bd"),
+]
+
+# Treat a collection as minted out at this fraction of its cap. Slightly below
+# 1.0 because the final few tokens are often reserved for the team, so a
+# collection stuck at 9,995/10,000 is effectively closed to the public.
+MINTED_OUT_RATIO = 0.995
+
+# Reject a "cap" that the minted supply overshoots by more than this factor. A
+# selector collision on an unrelated function can return a small bogus number
+# (observed live: a wrong selector returned 32 for a 1.2M-supply contract), and
+# reading that as a cap would wrongly suppress an actively minting drop. Real
+# sold-out collections sit at or just above their cap, never multiples of it.
+MAX_CREDIBLE_OVERSHOOT = 1.05
+
+
+def _decode_abi_uint(hex_str: str):
+    """Decode a single ABI-encoded uint256 from an eth_call result, or None."""
+    if not hex_str:
+        return None
+    clean = hex_str[2:] if hex_str.startswith("0x") else hex_str
+    if not clean:
+        return None
+    try:
+        value = int(clean[:64], 16)
+    except ValueError:
+        return None
+    # Reject absurd sentinels: many contracts return 2**256-1 for "uncapped",
+    # which must not be read as a real cap.
+    if value >= (1 << 255):
+        return None
+    return value
+
+
+async def _call_uint(chain: str, contract_address: str, selector: str):
+    """eth_call a no-arg uint256 getter. Returns None when absent or reverting."""
+    try:
+        payload = {
+            "jsonrpc": "2.0", "id": 1, "method": "eth_call",
+            "params": [{"to": contract_address, "data": selector}, "latest"],
+        }
+        res = await asyncio.to_thread(rpc_post, chain, payload)
+        if res and res.get("result"):
+            return _decode_abi_uint(res["result"])
+    except Exception:
+        pass
+    return None
+
+
+async def get_supply_info(chain: str, contract_address: str) -> dict:
+    """Resolve minted supply vs declared cap for a contract.
+
+    Returns::
+
+        {"minted": int|None, "max_supply": int|None,
+         "is_minted_out": bool, "reason": str}
+
+    ``is_minted_out`` is only True when BOTH numbers were resolved and minted has
+    reached MINTED_OUT_RATIO of the cap. Missing data yields False so an
+    unreadable contract is never blocked on this check alone.
+    """
+    info = {"minted": None, "max_supply": None, "is_minted_out": False, "reason": ""}
+
+    for _, selector in SUPPLY_SELECTORS:
+        value = await _call_uint(chain, contract_address, selector)
+        if value is not None:
+            info["minted"] = value
+            break
+
+    for _, selector in MAX_SUPPLY_SELECTORS:
+        value = await _call_uint(chain, contract_address, selector)
+        # A zero cap means "not configured", not "sold out".
+        if value is not None and value > 0:
+            info["max_supply"] = value
+            break
+
+    minted = info["minted"]
+    cap = info["max_supply"]
+    if minted is not None and cap:
+        # Guard against a selector collision returning a nonsense cap. If minted
+        # supply wildly exceeds the "cap", the cap is not a cap - discard it and
+        # fail open rather than suppressing an actively minting collection.
+        if minted > cap * MAX_CREDIBLE_OVERSHOOT:
+            info["max_supply"] = None
+            info["reason"] = f"{minted} minted, declared cap {cap} not credible (ignored)"
+            return info
+        if minted >= cap * MINTED_OUT_RATIO:
+            info["is_minted_out"] = True
+            info["reason"] = f"minted out ({minted}/{cap})"
+        else:
+            pct = round(minted / cap * 100, 1)
+            info["reason"] = f"{minted}/{cap} minted ({pct}%)"
+    return info
+
+
 async def get_verified_contract_source(chain: str, contract_address: str) -> str:
     """Fetch verified source code snippet if available from Blockscout or Etherscan API."""
     config = EVM_CHAINS.get(chain, {})
@@ -787,10 +919,27 @@ async def get_verified_contract_source(chain: str, contract_address: str) -> str
     return ""
 
 
+def _remember_contract(contract: str):
+    """Record a contract as handled, in memory and in the persistent store.
+
+    Used both after a successful alert and after a terminal skip (minted out), so
+    a restart does not re-evaluate work already completed.
+    """
+    if len(alerted_contracts_deque) == MAX_ALERTED_CONTRACTS:
+        oldest = alerted_contracts_deque.popleft()
+        alerted_contracts_set.discard(oldest)
+    if contract not in alerted_contracts_set:
+        alerted_contracts_set.add(contract)
+        alerted_contracts_deque.append(contract)
+    checkpoint.mark_seen(SEEN_EVM, contract)
+
+
 async def evaluate_contract_drop(chain: str, contract: str, txs: list, semaphore: asyncio.Semaphore):
     """Evaluate and alert for a single contract drop with concurrency limiting."""
     async with semaphore:
-        if contract in alerted_contracts_set:
+        # Dedup check spans restarts: the persisted store is authoritative, the
+        # in-memory set is just a fast path.
+        if contract in alerted_contracts_set or checkpoint.was_seen(SEEN_EVM, contract):
             return
 
         short_contract = f"{contract[:6]}...{contract[-4:]}"
@@ -829,6 +978,17 @@ async def evaluate_contract_drop(chain: str, contract: str, txs: list, semaphore
             return
 
         print(f"[Drops] ✅ {short_contract} on {chain} passed filters: {mint_count} mints, {age_hours}h old, {unique_minters} minters ({standard})")
+
+        # ── Minted-Out Gate ──────────────────────────────────────────
+        # A sold-out collection is not actionable - there is nothing left to
+        # mint by the time the alert lands. Checked before the explorer/Gemini
+        # spend. Recorded as seen so we don't re-evaluate it every cycle while
+        # it keeps emitting secondary transfers.
+        supply_info = await get_supply_info(chain, contract)
+        if supply_info["is_minted_out"]:
+            print(f"[Drops] ⏭️ Skipped {short_contract} on {chain}: {supply_info['reason']}")
+            _remember_contract(contract)
+            return
 
         # ── Deployer Resolution + TRUE deployment age (one explorer call) ─
         creation_info = await get_contract_creation_info(chain, contract, EVM_CHAINS)
@@ -914,11 +1074,9 @@ async def evaluate_contract_drop(chain: str, contract: str, txs: list, semaphore
             return
 
         # ── Dedup ─────────────────────────────────────────────────────
-        if len(alerted_contracts_deque) == MAX_ALERTED_CONTRACTS:
-            oldest = alerted_contracts_deque.popleft()
-            alerted_contracts_set.discard(oldest)
-        alerted_contracts_set.add(contract)
-        alerted_contracts_deque.append(contract)
+        # Marked BEFORE the send so a crash mid-send cannot produce a duplicate
+        # alert on restart. Losing one alert is preferable to spamming the chat.
+        _remember_contract(contract)
 
         # ── Build Telegram Buttons ────────────────────────────────────
         explorer_link = get_explorer_url(chain, contract)
@@ -999,6 +1157,7 @@ async def check_drops():
             if last_checked is None:
                 last_checked = max(0, current_block - step)
                 last_checked_blocks[chain] = last_checked
+                checkpoint.set_block(chain, last_checked)
 
             # No new blocks since last scan — skip so we never re-scan the same
             # window (a source of duplicate alerts).
@@ -1011,6 +1170,9 @@ async def check_drops():
             # preferable to a failed scan that never advances the watermark.
             max_span = max(step * 5, 2000)
             if current_block - from_block > max_span:
+                skipped = (current_block - max_span) - from_block
+                print(f"[Drops] ⚠️ {chain}: downtime gap too large, skipping "
+                      f"{skipped} block(s) to keep getLogs within RPC limits")
                 from_block = current_block - max_span
 
             transfers = await get_recent_transfers(chain, from_block, current_block)
@@ -1021,10 +1183,10 @@ async def check_drops():
                 print(f"[Drops] ⚠️ {chain}: RPC error during getLogs (all endpoints failed)")
                 continue
 
-            # Scan succeeded — advance the watermark past the scanned range.
-            last_checked_blocks[chain] = current_block
-
             if not transfers:
+                # Empty range still counts as fully processed.
+                last_checked_blocks[chain] = current_block
+                checkpoint.set_block(chain, current_block)
                 print(f"[Drops] {chain}: 0 mint events in blocks {from_block}→{current_block} ({current_block - from_block + 1} blocks)")
                 continue
 
@@ -1048,5 +1210,20 @@ async def check_drops():
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
+            # Commit the watermark only AFTER every alert from this range has been
+            # dispatched. Advancing earlier means a crash mid-evaluation loses
+            # those drops for good; advancing here means a crash re-scans the
+            # range and the persisted dedup set suppresses the duplicates.
+            last_checked_blocks[chain] = current_block
+            checkpoint.set_block(chain, current_block)
+
         except Exception as e:
             print(f"[Drops Error] {chain}: {e}")
+
+    # One durable write per full sweep rather than per chain. Wrapped so a
+    # storage error here can never take down the scan loop; the next sweep
+    # retries and the watermarks are still correct in memory.
+    try:
+        checkpoint.flush(force=True)
+    except Exception as e:
+        print(f"[Drops] ⚠️ Checkpoint flush failed: {e}")

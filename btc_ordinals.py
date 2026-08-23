@@ -16,6 +16,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from notifier import asend, asend_photo, download_image_bytes, escape_html
 from gemini_filter import gemini_score_nft, is_worth_alerting, verdict_badge
+import checkpoint
 
 try:
     from private.config_live import GEMINI_MIN_SCORE
@@ -28,8 +29,10 @@ ORDINALS_APIS = [
     "https://ordinals.com/inscriptions",
 ]
 
-# Track alerted inscriptions
+# Track alerted inscriptions. The in-memory pair is the fast path; checkpoint.py
+# holds the durable copy so a restart does not re-alert recent inscriptions.
 MAX_ALERTED_ORDINALS = 10000
+SEEN_BTC = "btc_inscriptions"
 alerted_ordinals_set = set()
 alerted_ordinals_deque = deque(maxlen=MAX_ALERTED_ORDINALS)
 
@@ -107,7 +110,8 @@ async def check_btc_ordinals():
         for raw_item in inscriptions:
             item = parse_inscription_item(raw_item)
             inscription_id = item.get("inscription_id")
-            if not inscription_id or inscription_id in alerted_ordinals_set:
+            if (not inscription_id or inscription_id in alerted_ordinals_set
+                    or checkpoint.was_seen(SEEN_BTC, inscription_id)):
                 continue
 
             number = item.get("number", 0)
@@ -140,11 +144,14 @@ async def check_btc_ordinals():
                 continue
 
             # ── Dedup ─────────────────────────────────────────────────────────
+            # Recorded BEFORE the send so a crash mid-send cannot re-alert this
+            # inscription after a restart.
             if len(alerted_ordinals_deque) == MAX_ALERTED_ORDINALS:
                 oldest = alerted_ordinals_deque.popleft()
                 alerted_ordinals_set.discard(oldest)
             alerted_ordinals_set.add(inscription_id)
             alerted_ordinals_deque.append(inscription_id)
+            checkpoint.mark_seen(SEEN_BTC, inscription_id)
 
             # ── Build Telegram Buttons ────────────────────────────────────────
             ordinals_url = f"https://ordinals.com/inscription/{inscription_id}"
@@ -192,3 +199,10 @@ async def check_btc_ordinals():
 
     except Exception as e:
         print(f"[Bitcoin Error] Ordinals: {e}")
+
+    # Persist the inscription dedup history so a restart does not re-alert the
+    # inscriptions still sitting on the API's recent page.
+    try:
+        checkpoint.flush(force=True)
+    except Exception as e:
+        print(f"[Bitcoin] ⚠️ Checkpoint flush failed: {e}")

@@ -18,6 +18,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from notifier import asend, asend_photo, download_image_bytes, escape_html
 from gemini_filter import gemini_score_nft, is_worth_alerting, verdict_badge
+import checkpoint
 from metadata_resolver import resolve_metadata_async
 
 try:
@@ -50,13 +51,20 @@ NON_NFT_MINTS = {
     "So11111111111111111111111111111111111111112", # Wrapped SOL
 }
 
-# Track alerted mints/collections to prevent duplicate notifications
+# Track alerted mints/collections to prevent duplicate notifications. In-memory
+# sets are the fast path; checkpoint.py holds the durable copy across restarts.
 MAX_ALERTED_SOLANA = 10000
+SEEN_SOL_MINTS = "solana_mints"
+SEEN_SOL_SIGS = "solana_signatures"
 alerted_solana_set = set()
 alerted_solana_deque = deque(maxlen=MAX_ALERTED_SOLANA)
 
-# Last processed signature per program
-last_signatures = {}
+# Last processed signature per program, resumed from the persistent checkpoint so
+# a restart continues from the last handled transaction instead of re-seeding.
+last_signatures = {
+    program_id: checkpoint.get_signature(program_id)
+    for _, program_id in PROGRAMS_TO_WATCH
+}
 
 
 def solana_rpc_post(payload: dict):
@@ -193,10 +201,14 @@ async def check_solana_drops():
                 continue
 
             last_sig = last_signatures.get(program_id)
-            last_signatures[program_id] = sigs[0].get("signature")
+            newest_sig = sigs[0].get("signature")
 
-            # First run: seed watermark and continue
+            # First run for this program: seed the watermark and skip the batch so
+            # we don't alert on history. Persisted, so this only happens once ever
+            # rather than on every restart.
             if last_sig is None:
+                last_signatures[program_id] = newest_sig
+                checkpoint.set_signature(program_id, newest_sig, flush_now=True)
                 continue
 
             for sig_info in sigs:
@@ -204,7 +216,7 @@ async def check_solana_drops():
                 if sig == last_sig:
                     break  # Reached previously processed batch
 
-                if sig in alerted_solana_set:
+                if sig in alerted_solana_set or checkpoint.was_seen(SEEN_SOL_SIGS, sig):
                     continue
 
                 tx_data = await get_parsed_transaction(sig)
@@ -216,7 +228,9 @@ async def check_solana_drops():
                 creator = mint_info.get("creator")
                 token_uri = mint_info.get("token_uri")
 
-                if not mint_address or mint_address in alerted_solana_set or mint_address in NON_NFT_MINTS:
+                if (not mint_address or mint_address in alerted_solana_set
+                        or mint_address in NON_NFT_MINTS
+                        or checkpoint.was_seen(SEEN_SOL_MINTS, mint_address)):
                     continue
 
                 short_mint = f"{mint_address[:6]}...{mint_address[-4:]}"
@@ -256,12 +270,16 @@ async def check_solana_drops():
                     continue
 
                 # ── Dedup ─────────────────────────────────────────────────────
+                # Recorded BEFORE the send so a crash mid-send cannot re-alert
+                # this mint after a restart.
                 if len(alerted_solana_deque) == MAX_ALERTED_SOLANA:
                     oldest = alerted_solana_deque.popleft()
                     alerted_solana_set.discard(oldest)
                 alerted_solana_set.add(mint_address)
                 alerted_solana_deque.append(mint_address)
                 alerted_solana_set.add(sig)
+                checkpoint.mark_seen(SEEN_SOL_MINTS, mint_address)
+                checkpoint.mark_seen(SEEN_SOL_SIGS, sig)
 
                 # ── Build Telegram Buttons ────────────────────────────────────
                 solscan_link = f"https://solscan.io/token/{mint_address}"
@@ -307,5 +325,16 @@ async def check_solana_drops():
 
                 print(f"[Solana] 🆕 Alerted: {display_name} ({short_mint}) | AI {ai_result['score']}/100")
 
+            # Advance the signature watermark only after the whole batch has been
+            # processed, so a crash mid-batch re-scans it rather than skipping it.
+            # The persisted dedup sets suppress any duplicate alerts on re-scan.
+            last_signatures[program_id] = newest_sig
+            checkpoint.set_signature(program_id, newest_sig)
+
         except Exception as e:
             print(f"[Solana Error] {program_name}: {e}")
+
+    try:
+        checkpoint.flush(force=True)
+    except Exception as e:
+        print(f"[Solana] ⚠️ Checkpoint flush failed: {e}")
