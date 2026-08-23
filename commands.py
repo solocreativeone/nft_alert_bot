@@ -140,6 +140,49 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("\n".join(lines), parse_mode="HTML", disable_web_page_preview=True)
 
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Report scan checkpoint position and Gemini key-pool quota usage.
+
+    Lets you confirm from Telegram that the bot resumed from its saved position
+    and see which API keys still have quota, without shell access to the host.
+    """
+    if str(update.effective_chat.id) != str(CHAT_ID).strip():
+        return
+
+    import checkpoint
+    from gemini_filter import pool_status
+
+    lines = ["📊 <b>Bot Status</b>\n"]
+
+    blocks = checkpoint.all_blocks()
+    if blocks:
+        lines.append("<b>Last processed block:</b>")
+        for chain in sorted(blocks):
+            lines.append(f"  {chain}: <code>{blocks[chain]}</code>")
+    else:
+        lines.append("<b>Last processed block:</b> none yet (cold start)")
+
+    processed = sum(
+        checkpoint.seen_count(section) for section in checkpoint.SEEN_LIMITS
+    )
+    lines.append(f"\n<b>Processed mints remembered:</b> {processed}")
+
+    status = pool_status()
+    lines.append(
+        f"\n<b>Gemini keys:</b> {status['available_keys']}/{status['total_keys']} available"
+    )
+    for row in status["keys"]:
+        mark = "🟢" if row["available"] else "🔴"
+        active = " (active)" if row["active"] else ""
+        cooling = " cooling down" if row["cooling_down"] else ""
+        lines.append(
+            f"  {mark} key #{row['index']}: {row['used_today']}/{row['limit']} "
+            f"used today{active}{cooling}"
+        )
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_chat.id) != str(CHAT_ID).strip():
         return
@@ -151,6 +194,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/unwatch 0xContract — remove a collection\n"
         "/list — show all watched collections\n"
         "/live — check live & upcoming mints now\n"
+        "/status — scan position and Gemini key quota\n"
         "/help — show this message"
     )
 
@@ -163,6 +207,7 @@ def build_app():
     app.add_handler(CommandHandler("unwatch", unwatch_command))
     app.add_handler(CommandHandler("list", list_command))
     app.add_handler(CommandHandler("live", live_command))
+    app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("help", help_command))
     return app
 
@@ -173,7 +218,7 @@ async def start_polling():
     await app.updater.start_polling(allowed_updates=["message"])
     await app.start()
     print("[Commands] ✅ Telegram command listener started")
-    print("[Commands]    /start  /watch  /unwatch  /list  /live  /help")
+    print("[Commands]    /start  /watch  /unwatch  /list  /live  /status  /help")
     await asyncio.Event().wait()
 
 def run_command_listener():

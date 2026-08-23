@@ -39,6 +39,9 @@ No webhooks, no complex database setups, and zero maintenance.
 - 🛡️ **Cloudflare Bypass Tech:** Uses `curl_cffi` for browser TLS/JA3 impersonation to scrape drop aggregators without hitting `403 Forbidden` barriers.
 - 🖼️ **Reliable Image Delivery:** Downloads image bytes in-memory and uploads them directly to Telegram's photo API, avoiding broken image previews.
 - 🧠 **Smart Deduplication:** Memory-bounded caching prevents duplicate alerts for already-seen contracts and scheduled drops.
+- 💾 **Crash-Safe Resume (Persistent Checkpoint):** Scan progress is written to `state.json` (git-ignored), so a restart or crash continues from the last processed blockchain position instead of rescanning old mints. Covers EVM block watermarks, Solana signature positions, Bitcoin inscription IDs, and the processed-mint history used for deduplication. Watermarks are committed only after alerts for a range are dispatched, so a crash re-scans that range rather than losing it, and the persisted dedup history suppresses the duplicates.
+- 🔑 **Gemini API Key Rotation:** Supports a pool of Gemini keys. Each free-tier key allows roughly 500 requests per UTC day; when one hits its quota or a rate limit the bot automatically rotates to the next usable key and retries, so a single exhausted key no longer silences alerts for the rest of the day. Per-key usage is persisted as a SHA-256 fingerprint (never the key itself), so a restart does not reset counters and start hammering a spent key.
+- 🚫 **Minted-Out Filter:** Reads a collection's minted supply against its declared cap on-chain and skips collections that have already sold out, since there is nothing left to mint by the time an alert lands. Contracts that expose no readable cap are never blocked on missing data.
 
 ---
 
@@ -118,6 +121,11 @@ OPENSEA_API_KEY=your_opensea_api_key_here
 ALCHEMY_API_KEY=your_alchemy_api_key_here
 GEMINI_API_KEY=your_gemini_api_key_here
 GEMINI_MIN_SCORE=40
+
+# Optional: extra Gemini keys for daily-quota rotation (comma-separated).
+# GEMINI_API_KEY is always tried first, then these in order.
+GEMINI_API_KEYS=second_key_here,third_key_here
+GEMINI_DAILY_LIMIT=500
 ```
 
 #### Option B: Using a Configuration File (`config.py`)
@@ -130,6 +138,12 @@ OPENSEA_API_KEY = "your_opensea_api_key_here"
 ALCHEMY_API_KEY = "your_alchemy_api_key_here"
 GEMINI_API_KEY = "your_gemini_api_key_here"
 GEMINI_MIN_SCORE = 40
+
+# Extra Gemini keys for daily-quota rotation. Every name imported from this file
+# must exist, because one missing name aborts the whole import and silently
+# falls back to config.py.
+GEMINI_API_KEYS = ["second_key_here", "third_key_here"]
+GEMINI_DAILY_LIMIT = 500
 ```
 
 ### 5. Launch the Bot
@@ -163,6 +177,7 @@ Manage your watchlist directly from Telegram without editing config files:
 | `/unwatch <0xContract>` | Remove a contract from your watchlist |
 | `/list` | Show your active watched collections |
 | `/live` | View the top 10 upcoming Ethereum mints immediately |
+| `/status` | Show the last processed block per chain, how many mints are remembered, and Gemini key quota usage |
 | `/help` | Display command help |
 
 ---
