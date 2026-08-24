@@ -105,39 +105,62 @@ def test_empty_body_is_rejected():
 # ── the scraper must read metadata, not invent it ─────────────────────────────
 
 def test_scraper_parses_real_inscription_numbers(monkeypatch):
-    """Every alert in the smoke run said "Ordinal #0" because number was hardcoded."""
+    """Every alert in the smoke run said "Ordinal #0" because number was hardcoded.
+
+    The number lives on the inscription detail page, not the listing: the listing
+    renders image tiles whose anchors have no text. See
+    tests/test_smoke_run_defects.py for the detail-page contract.
+    """
     import btc_ordinals
 
-    html = """
+    listing = """
     <html><body>
-      <a href="/inscription/aaaa1111i0">Inscription 91234567</a>
-      <a href="/inscription/bbbb2222i0">Inscription 91234568</a>
+      <a href="/inscription/aaaa1111i0"><img src="/content/aaaa1111i0"></a>
+      <a href="/inscription/bbbb2222i0"><img src="/content/bbbb2222i0"></a>
     </body></html>
     """
+    details = {
+        "aaaa1111i0": "<h1>Inscription 91234567</h1><dl><dt>content type</dt><dd>image/png</dd></dl>",
+        "bbbb2222i0": "<h1>Inscription 91234568</h1><dl><dt>content type</dt><dd>image/png</dd></dl>",
+    }
 
-    class Res:
-        status_code = 200
-        text = html
+    def fake_get(url, **kw):
+        body = listing
+        for iid, html in details.items():
+            if iid in url:
+                body = html
+                break
 
-    monkeypatch.setattr(btc_ordinals.requests, "get", lambda *a, **k: Res())
+        class Res:
+            status_code = 200
+            text = body
+        return Res()
+
+    monkeypatch.setattr(btc_ordinals.requests, "get", fake_get)
     out = btc_ordinals.fetch_recent_inscriptions(limit=2)
     assert len(out) == 2
     numbers = [item["number"] for item in out]
-    assert numbers != [0, 0], "inscription numbers must be parsed, not hardcoded to 0"
+    assert numbers != [0, 0], "inscription numbers must be read, not hardcoded to 0"
     assert numbers == [91234567, 91234568]
 
 
 def test_scraper_does_not_claim_a_wildcard_content_type(monkeypatch):
-    """The scraper never reads the content type, so it must not assert one."""
+    """The scraper must report the real type from the detail page, never "image/*"."""
     import btc_ordinals
 
-    class Res:
-        status_code = 200
-        text = '<a href="/inscription/cccc3333i0">Inscription 5</a>'
+    def fake_get(url, **kw):
+        class Res:
+            status_code = 200
+            text = ("<h1>Inscription 5</h1><dl><dt>content type</dt>"
+                    "<dd>text/plain;charset=utf-8</dd></dl>"
+                    if "/inscription/cccc3333i0" in url
+                    else '<a href="/inscription/cccc3333i0"><img src="/x"></a>')
+        return Res()
 
-    monkeypatch.setattr(btc_ordinals.requests, "get", lambda *a, **k: Res())
+    monkeypatch.setattr(btc_ordinals.requests, "get", fake_get)
     out = btc_ordinals.fetch_recent_inscriptions(limit=1)
     assert out, "expected one inscription"
     assert out[0]["content_type"] != "image/*", (
         "'image/*' is not a MIME type; it defeats extension detection downstream"
     )
+    assert out[0]["content_type"] == "text/plain;charset=utf-8"

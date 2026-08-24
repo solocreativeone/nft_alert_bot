@@ -99,8 +99,13 @@ def _sniff_image_kind(data: bytes) -> Optional[str]:
     """Return an extension for recognised bitmap magic bytes, else None.
 
     Magic bytes are the only trustworthy signal. Declared content types are
-    routinely wrong: the ordinals.com scraper reports "image/*" for every
-    inscription, and IPFS gateways return HTML error pages with image types.
+    routinely wrong: the ordinals.com scraper reports no type at all, and IPFS
+    gateways return HTML error pages under an image content type.
+
+    AVIF matters here because i2c.seadn.io now serves OpenSea collection art as
+    AVIF. It shares the ISO-BMFF ftyp container with mp4 and HEIC, so the brand
+    code has to be checked: a loose ftyp match would start sending videos as
+    photos again.
     """
     if not data:
         return None
@@ -112,6 +117,8 @@ def _sniff_image_kind(data: bytes) -> Optional[str]:
         return "gif"
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "webp"
+    if data[4:8] == b"ftyp" and data[8:12] in (b"avif", b"avis"):
+        return "avif"
     return None
 
 
@@ -133,6 +140,8 @@ def _guess_extension(content_type: str, data: bytes) -> str:
         return "gif"
     if "webp" in ct:
         return "webp"
+    if "avif" in ct:
+        return "avif"
     return "png"
 
 

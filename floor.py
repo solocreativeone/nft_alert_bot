@@ -70,8 +70,9 @@ async def send_floor_alert(col, floor, direction, image_url):
     if image_url:
         try:
             image_bytes = await download_image_bytes(image_url)
-            await asend_photo(image_bytes, caption=text, parse_mode="HTML", reply_markup=reply_markup)
-            sent = True
+            if image_bytes:
+                await asend_photo(image_bytes, caption=text, parse_mode="HTML", reply_markup=reply_markup)
+                sent = True
         except Exception as e:
             print(f"[Floor] Photo send failed: {e} — falling back to text")
 

@@ -213,12 +213,37 @@ def test_state_file_is_valid_json(isolated_state):
 # it globally; this asserts that isolation is actually in effect.
 
 def test_state_file_is_redirected_away_from_the_repo(isolated_state):
+    """Writes must land in the isolated store, never in the repo's state.json.
+
+    Asserting the repo file is absent was wrong: bot.py legitimately creates it
+    on any machine the bot has actually run on, so the test failed on a working
+    checkout while passing on one that had never run. What matters is that our
+    writes do not reach it, so compare the file's contents before and after
+    instead of its existence.
+    """
     repo_state = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "state.json"
     )
     assert checkpoint.STATE_FILE != repo_state
+
+    before = None
+    if os.path.exists(repo_state):
+        with open(repo_state, "rb") as fh:
+            before = fh.read()
+
     checkpoint.mark_seen("evm_contracts", "isolation-probe", flush_now=True)
-    assert os.path.exists(isolated_state)
-    assert not os.path.exists(repo_state), (
-        "tests must never write the production state file"
-    )
+
+    assert os.path.exists(isolated_state), "the write must land in the isolated store"
+    with open(isolated_state, encoding="utf-8") as fh:
+        assert "isolation-probe" in fh.read()
+
+    if before is None:
+        assert not os.path.exists(repo_state), (
+            "tests must not create the production state file"
+        )
+    else:
+        with open(repo_state, "rb") as fh:
+            assert fh.read() == before, (
+                "tests must never modify the production state file"
+            )
+        assert b"isolation-probe" not in before

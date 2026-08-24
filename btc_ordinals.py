@@ -39,15 +39,16 @@ alerted_ordinals_deque = deque(maxlen=MAX_ALERTED_ORDINALS)
 
 
 def _parse_inscription_number(text: str) -> int:
-    """Pull the inscription number out of listing link text.
+    """Pull the inscription number out of detail-page text.
 
-    ordinals.com renders links as "Inscription 91234567". The number was
-    previously hardcoded to 0, so every alert was titled "Ordinal #0". Returns 0
-    only when the text genuinely carries no number.
+    ordinals.com renders it as "<h1>Inscription 127212232</h1>". Returns 0 when no
+    number is present rather than guessing.
     """
     if not text:
         return 0
-    match = re.search(r"(\d[\d,]*)", text)
+    match = re.search(r"Inscription\s+(\d[\d,]*)", text)
+    if not match:
+        match = re.search(r"(\d[\d,]*)", text)
     if not match:
         return 0
     try:
@@ -56,13 +57,44 @@ def _parse_inscription_number(text: str) -> int:
         return 0
 
 
+def _fetch_inscription_details(iid: str, headers: dict) -> dict:
+    """Read number and content type off an inscription's detail page.
+
+    The listing page renders image tiles, so its anchors carry no text and no
+    metadata: parsing them yielded "Ordinal #0" with an empty type for every
+    alert. Both facts only exist at /inscription/<id>, so this costs one extra
+    request per inscription.
+
+    Returns empty values on any failure; a detail miss must not lose the
+    inscription itself.
+    """
+    out = {"number": 0, "content_type": ""}
+    try:
+        res = requests.get(f"https://ordinals.com/inscription/{iid}",
+                           headers=headers, timeout=10)
+        if res.status_code != 200:
+            return out
+        html = res.text
+    except Exception:
+        return out
+
+    heading = re.search(r"<h1>\s*Inscription\s+([\d,]+)\s*</h1>", html, re.I)
+    if heading:
+        out["number"] = _parse_inscription_number(heading.group(0))
+
+    ctype = re.search(r"<dt>\s*content type\s*</dt>\s*<dd[^>]*>([^<]+)</dd>",
+                      html, re.I)
+    if ctype:
+        out["content_type"] = ctype.group(1).strip()
+    return out
+
+
 def fetch_recent_inscriptions(limit: int = 15) -> list:
     """Fetch recent Bitcoin inscriptions directly from official Ordinals indexer.
 
-    Parses the inscription number out of the link text rather than reporting 0 for
-    everything, and leaves content_type empty because this HTML listing does not
-    carry one. Claiming "image/*" here defeated extension detection downstream and
-    made Telegram reject every photo with Image_process_failed.
+    The listing page yields ids only. Number and content type come from each
+    inscription's detail page, one request each, because inventing them produced
+    "Ordinal #0" titles and an empty "Type:" line on every alert.
     """
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
@@ -75,23 +107,29 @@ def fetch_recent_inscriptions(limit: int = 15) -> list:
         if res.status_code == 200:
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(res.text, "html.parser")
-            inscriptions = []
+            seen_ids = []
             for a in soup.find_all("a", href=True):
                 href = a["href"]
                 if href.startswith("/inscription/"):
                     iid = href.split("/inscription/")[-1].strip("/")
-                    tx_id = iid.split("i")[0] if "i" in iid else iid
-                    inscriptions.append({
-                        "id": iid,
-                        "inscription_id": iid,
-                        "number": _parse_inscription_number(a.get_text()),
-                        "content_type": "",
-                        "address": "",
-                        "tx_id": tx_id,
-                        "image_url": f"https://ordinals.com/content/{iid}",
-                    })
-                    if len(inscriptions) >= limit:
+                    if iid and iid not in seen_ids:
+                        seen_ids.append(iid)
+                    if len(seen_ids) >= limit:
                         break
+
+            inscriptions = []
+            for iid in seen_ids:
+                details = _fetch_inscription_details(iid, headers)
+                tx_id = iid.split("i")[0] if "i" in iid else iid
+                inscriptions.append({
+                    "id": iid,
+                    "inscription_id": iid,
+                    "number": details["number"],
+                    "content_type": details["content_type"],
+                    "address": "",
+                    "tx_id": tx_id,
+                    "image_url": f"https://ordinals.com/content/{iid}",
+                })
             if inscriptions:
                 return inscriptions
     except Exception as e:
