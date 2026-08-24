@@ -38,6 +38,20 @@ alerted_ordinals_set = set()
 alerted_ordinals_deque = deque(maxlen=MAX_ALERTED_ORDINALS)
 
 
+def is_image_inscription(content_type) -> bool:
+    """True only for inscription content types that are collectible images.
+
+    The scanner exists to surface NFT art. Recent inscriptions are dominated by
+    BRC-20 token operations (content type text/plain, body {"p":"brc-20"...}) and
+    other non-art text, which are not NFTs and cannot be scored meaningfully. An
+    unknown or empty type is rejected: assuming it might be an image is exactly
+    what flooded the feed and burned the Gemini quota.
+    """
+    if not content_type:
+        return False
+    return content_type.strip().lower().startswith("image/")
+
+
 def magiceden_url(inscription_id: str, number: int) -> str:
     """Build a marketplace link for an inscription.
 
@@ -188,6 +202,7 @@ async def check_btc_ordinals():
         if not inscriptions:
             return
 
+        skipped_non_image = 0
         for raw_item in inscriptions:
             item = parse_inscription_item(raw_item)
             inscription_id = item.get("inscription_id")
@@ -200,6 +215,15 @@ async def check_btc_ordinals():
             creator = item.get("creator", "")
             image_url = item.get("image_url")
             short_id = f"{inscription_id[:6]}...{inscription_id[-6:]}"
+
+            # ── Content filter ────────────────────────────────────────────────
+            # Must run BEFORE the Gemini call, otherwise it saves no quota. The
+            # recent-inscriptions feed is roughly 90% BRC-20 token operations,
+            # which are fungible-token transactions rather than NFT art.
+            if not is_image_inscription(content_type):
+                skipped_non_image += 1
+                checkpoint.mark_seen(SEEN_BTC, inscription_id)
+                continue
 
             # ── Gemini AI Audit ───────────────────────────────────────────────
             ai_result = await gemini_score_nft({
@@ -274,9 +298,18 @@ async def check_btc_ordinals():
                     print(f"[Bitcoin] Photo send failed: {photo_err} — falling back to text")
 
             if not sent:
-                await asend(text, reply_markup=reply_markup)
+                try:
+                    await asend(text, reply_markup=reply_markup)
+                    sent = True
+                except Exception as text_err:
+                    print(f"[Bitcoin] ❌ DELIVERY FAILED, alert did not reach Telegram: {text_err}")
 
-            print(f"[Bitcoin] 🆕 Alerted: Ordinal #{number} ({short_id}) | AI {ai_result['score']}/100")
+            if sent:
+                print(f"[Bitcoin] 🆕 Alerted: Ordinal #{number} ({short_id}) | AI {ai_result['score']}/100")
+
+        if skipped_non_image:
+            print(f"[Bitcoin] ⏭️ Skipped {skipped_non_image}/{len(inscriptions)} "
+                  f"non-image inscriptions (BRC-20/text) before the AI audit")
 
     except Exception as e:
         print(f"[Bitcoin Error] Ordinals: {e}")
