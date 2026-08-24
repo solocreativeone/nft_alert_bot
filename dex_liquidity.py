@@ -5,7 +5,41 @@ Queries DexScreener's public API to detect if an NFT/token has associated
 liquidity pairs (e.g. Uniswap, Sushiswap, PancakeSwap), pool depth, and 24h volume.
 """
 import asyncio
+import time
 import requests
+
+
+# ── Circuit breaker ───────────────────────────────────────────────────────────
+# DexScreener is unreachable from some networks entirely: measured live, 5s, 15s
+# and 30s timeouts all failed with ReadTimeout. Paying that wait once per contract
+# is what made alerts arrive minutes late while the terminal showed them promptly.
+# Liquidity is decoration on the alert, so after a few consecutive failures stop
+# calling and retry only after a cooldown.
+BREAKER_THRESHOLD = 3
+BREAKER_COOLDOWN = 600
+
+_consecutive_failures = 0
+_breaker_opened_at = 0.0
+
+
+def reset_breaker():
+    """Clear breaker state. Used by tests and after a successful call."""
+    global _consecutive_failures, _breaker_opened_at
+    _consecutive_failures = 0
+    _breaker_opened_at = 0.0
+
+
+def _breaker_is_open() -> bool:
+    """True while the cooldown is active, so no request should be attempted."""
+    global _consecutive_failures, _breaker_opened_at
+    if _consecutive_failures < BREAKER_THRESHOLD:
+        return False
+    if time.monotonic() - _breaker_opened_at >= BREAKER_COOLDOWN:
+        # Cooldown elapsed: allow one probe through to test recovery.
+        _consecutive_failures = 0
+        _breaker_opened_at = 0.0
+        return False
+    return True
 
 
 def _format_currency(amount: float) -> str:
@@ -19,19 +53,38 @@ def _format_currency(amount: float) -> str:
     return f"${amount:,.0f}"
 
 
-def fetch_dex_screener_sync(contract_address: str) -> dict:
-    """Synchronous worker to query DexScreener token endpoint."""
+def fetch_dex_data(contract_address: str) -> dict:
+    """Query DexScreener, skipping the call entirely while the breaker is open."""
+    global _consecutive_failures, _breaker_opened_at
+
     if not contract_address:
+        return {}
+
+    if _breaker_is_open():
         return {}
 
     url = f"https://api.dexscreener.com/latest/dex/tokens/{contract_address}"
     try:
         res = requests.get(url, timeout=5, headers={"User-Agent": "NFTAlertBot/1.0"})
         if res.status_code == 200:
+            reset_breaker()
             return res.json()
+        _consecutive_failures += 1
     except Exception as e:
+        _consecutive_failures += 1
         print(f"[DexLiquidity] ⚠️ DexScreener lookup failed for {contract_address[:10]}...: {e}")
+
+    if _consecutive_failures == BREAKER_THRESHOLD:
+        _breaker_opened_at = time.monotonic()
+        print(f"[DexLiquidity] ⏸  {BREAKER_THRESHOLD} consecutive failures; "
+              f"skipping liquidity lookups for {BREAKER_COOLDOWN // 60} min "
+              f"(alerts continue without liquidity data)")
     return {}
+
+
+def fetch_dex_screener_sync(contract_address: str) -> dict:
+    """Backwards-compatible alias for fetch_dex_data."""
+    return fetch_dex_data(contract_address)
 
 
 def parse_dex_data(raw_data: dict, chain: str = "") -> dict:

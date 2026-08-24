@@ -340,6 +340,9 @@ def reorder_rpcs_by_health(rpcs, probe=probe_rpc_endpoint, block_step: Optional[
     if not healthy:
         print("[Drops] ⚠️  No endpoint passed the health probe; "
               "runtime failover will pick a working one")
+    # refusing goes last unconditionally, including when every other endpoint for
+    # this chain went unprobed. A 429 is a fact; an unprobed endpoint is a maybe,
+    # and a maybe outranks a known no.
     return healthy + unknown + refusing
 
 
@@ -390,12 +393,27 @@ def wire_healthy_rpcs(chains=None, probe=probe_rpc_endpoint,
             try:
                 result = future.result(timeout=0)
             except Exception:
+                # Could not determine health: treat as untested rather than
+                # unhealthy, so a probe error cannot demote a working endpoint.
                 result = None
             # Preserve the tri-state: True/False are verdicts, None means we
             # learned nothing. Coercing None to False promotes broken endpoints.
             health[url] = result if result is None else bool(result)
             if time.monotonic() > deadline:
                 break
+
+        # The budget stops us waiting, but any probe that already finished has a
+        # real verdict worth keeping. Discarding those let a known-429 endpoint
+        # look merely "unprobed" and reclaim first place on a chain whose other
+        # endpoints were still in flight.
+        for future, url in futures.items():
+            if url in health or not future.done():
+                continue
+            try:
+                result = future.result(timeout=0)
+            except Exception:
+                result = None
+            health[url] = result if result is None else bool(result)
 
     unprobed = [u for u in jobs if u not in health]
     if unprobed:
@@ -1158,20 +1176,47 @@ async def evaluate_contract_drop(chain: str, contract: str, txs: list, semaphore
         )
 
         # ── Send Image or Text Alert ──────────────────────────────────
-        sent = False
-        if image_url:
-            try:
-                img_bytes = await download_image_bytes(image_url)
-                if img_bytes:
-                    await asend_photo(img_bytes, caption=text, parse_mode="HTML", reply_markup=reply_markup)
-                    sent = True
-            except Exception as photo_err:
-                print(f"[Drops] Photo send failed: {photo_err} — falling back to text")
+        delivered = await deliver_alert(
+            text=text, reply_markup=reply_markup, image_url=image_url,
+            label=" Drops",
+        )
 
-        if not sent:
-            await asend(text, reply_markup=reply_markup)
+        if delivered:
+            print(f"[Drops] 🆕 Alerted: {short_contract} | {standard} | {mint_count} mints | {age_hours}h | AI {ai_result['score']}/100 on {chain}")
 
-        print(f"[Drops] 🆕 Alerted: {short_contract} | {standard} | {mint_count} mints | {age_hours}h | AI {ai_result['score']}/100 on {chain}")
+
+async def deliver_alert(text, reply_markup=None, image_url=None,
+                        send_photo=None, send_text=None, label=""):
+    """Send an alert and report truthfully whether Telegram accepted it.
+
+    Returns True only when a send completed. Callers must not log "Alerted" unless
+    this returns True: the previous code left the text fallback unguarded, so a
+    Telegram rejection propagated while the operator saw an alert in the terminal
+    that never arrived. That is the "shows in the terminal but never reaches TG"
+    failure, and it is worse than a crash because it looks like success.
+
+    Photo failures fall back to text. A text failure is reported, never swallowed
+    silently.
+    """
+    photo_sender = send_photo or asend_photo
+    text_sender = send_text or asend
+
+    if image_url:
+        try:
+            img_bytes = await download_image_bytes(image_url)
+            if img_bytes:
+                await photo_sender(img_bytes, caption=text, parse_mode="HTML",
+                                   reply_markup=reply_markup)
+                return True
+        except Exception as photo_err:
+            print(f"[Alert]{label} Photo send failed: {photo_err} — falling back to text")
+
+    try:
+        await text_sender(text, reply_markup=reply_markup)
+        return True
+    except Exception as text_err:
+        print(f"[Alert]{label} ❌ DELIVERY FAILED, alert did not reach Telegram: {text_err}")
+        return False
 
 
 async def check_drops():

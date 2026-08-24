@@ -38,6 +38,24 @@ alerted_ordinals_set = set()
 alerted_ordinals_deque = deque(maxlen=MAX_ALERTED_ORDINALS)
 
 
+def magiceden_url(inscription_id: str, number: int) -> str:
+    """Build a marketplace link for an inscription.
+
+    Currently returns an ordinals.com link, not a Magic Eden one.
+
+    Magic Eden's Ordinals item-details path was reported 404 by the user with the
+    inscription id. Probing from here could not establish the correct shape: a
+    Cloudflare WAF returns 403 or 404 inconsistently for the same URL format
+    (inscription #0 by number gave 404 while #100 gave 403), so HTTP status carries
+    no signal about URL validity. Rather than ship a second guess, link to
+    ordinals.com, which is verified working and shows the same inscription.
+
+    To restore a Magic Eden button, open one Ordinal on magiceden.io in a browser
+    and copy the real URL shape, then reinstate it here with a test.
+    """
+    return f"https://ordinals.com/inscription/{inscription_id}"
+
+
 def _parse_inscription_number(text: str) -> int:
     """Pull the inscription number out of detail-page text.
 
@@ -218,13 +236,13 @@ async def check_btc_ordinals():
 
             # ── Build Telegram Buttons ────────────────────────────────────────
             ordinals_url = f"https://ordinals.com/inscription/{inscription_id}"
-            magiceden_btc_url = f"https://magiceden.io/ordinals/item-details/{inscription_id}"
+            magiceden_btc_url = magiceden_url(inscription_id, number)
             mempool_url = f"https://mempool.space/tx/{item.get('tx_id', '')}" if item.get("tx_id") else ordinals_url
 
             button_rows = [
                 [
                     InlineKeyboardButton(text="🟧 Ordinals.com", url=ordinals_url),
-                    InlineKeyboardButton(text="🪄 Magic Eden BTC", url=magiceden_btc_url),
+                    InlineKeyboardButton(text="🔎 Inscription Details", url=magiceden_btc_url),
                 ],
                 [
                     InlineKeyboardButton(text="⛓️ Mempool TX", url=mempool_url),

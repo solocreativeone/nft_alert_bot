@@ -26,18 +26,21 @@ import notifier
 
 # ── AVIF support (defect 2) ───────────────────────────────────────────────────
 
-def test_avif_is_recognised_as_an_image():
-    """i2c.seadn.io serves OpenSea collection art as AVIF. Telegram accepts it.
+def test_avif_is_detected_but_not_sent(monkeypatch):
+    """i2c.seadn.io serves OpenSea collection art as AVIF.
 
-    Observed live:
-      [Image] Not a supported image; refusing to send as photo
-      (declared: image/avif, 6928 bytes, starts b'\\x00\\x00\\x00\\x1cftypavif...')
+    An earlier version of this test asserted AVIF should be ACCEPTED. That was
+    wrong and shipped a regression: Telegram's sendPhoto supports JPEG, PNG, GIF,
+    WEBP, BMP and TIFF, so uploading AVIF returns Image_process_failed. Detecting
+    the format is still useful for the log; sending it is not.
+
+    See tests/test_delivery_defects.py for the full send-boundary contract.
     """
     avif = b"\x00\x00\x00\x1cftypavif\x00\x00\x00\x00" + b"\x00" * 64
-    assert notifier._sniff_image_kind(avif) == "avif"
-    out = notifier._finalize_image(avif, content_type="image/avif")
-    assert out is not None, "AVIF is a real image format and must not be refused"
-    assert out.name.endswith(".avif")
+    assert notifier._sniff_image_kind(avif) == "avif", "format must still be identified"
+    assert notifier._finalize_image(avif, content_type="image/avif") is None, (
+        "Telegram cannot decode AVIF; refusing yields a clean text alert"
+    )
 
 
 def test_avif_variant_brands_are_recognised():

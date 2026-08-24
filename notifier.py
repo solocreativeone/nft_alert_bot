@@ -95,17 +95,26 @@ def _rasterize_svg(svg_bytes):
         return None
 
 
+# Formats Telegram's sendPhoto will actually decode. AVIF is deliberately absent:
+# it is a real image and _sniff_image_kind identifies it, but uploading one returns
+# Image_process_failed, so accepting AVIF turned a clean text fallback into a failed
+# send followed by a fallback. Detection and acceptance are separate questions.
+TELEGRAM_PHOTO_EXTENSIONS = frozenset({"png", "jpg", "gif", "webp"})
+
+
 def _sniff_image_kind(data: bytes) -> Optional[str]:
-    """Return an extension for recognised bitmap magic bytes, else None.
+    """Return an extension for recognised image magic bytes, else None.
+
+    Identifies more formats than Telegram accepts on purpose, so the refusal log
+    can name what the bytes actually were. Use TELEGRAM_PHOTO_EXTENSIONS to decide
+    whether a recognised format is sendable.
 
     Magic bytes are the only trustworthy signal. Declared content types are
-    routinely wrong: the ordinals.com scraper reports no type at all, and IPFS
-    gateways return HTML error pages under an image content type.
+    routinely wrong: IPFS gateways return HTML error pages under an image content
+    type, and a 404 body arrives as application/json.
 
-    AVIF matters here because i2c.seadn.io now serves OpenSea collection art as
-    AVIF. It shares the ISO-BMFF ftyp container with mp4 and HEIC, so the brand
-    code has to be checked: a loose ftyp match would start sending videos as
-    photos again.
+    AVIF shares the ISO-BMFF ftyp container with mp4 and HEIC, so the brand code is
+    checked rather than the box alone.
     """
     if not data:
         return None
@@ -169,6 +178,10 @@ def _finalize_image(data: bytes, content_type: str = ""):
         preview = data[:16]
         print(f"[Image] Not a supported image; refusing to send as photo "
               f"(declared: {content_type or 'none'}, {len(data)} bytes, starts {preview!r})")
+        return None
+    if kind not in TELEGRAM_PHOTO_EXTENSIONS:
+        print(f"[Image] {kind.upper()} is not a Telegram photo format; "
+              f"sending as text instead ({len(data)} bytes)")
         return None
     if len(data) > MAX_IMAGE_BYTES:
         print(f"[Image] Skipping oversized image ({len(data)} bytes > {MAX_IMAGE_BYTES})")
