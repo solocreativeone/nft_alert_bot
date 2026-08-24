@@ -84,6 +84,7 @@ def test_non_image_inscriptions_never_reach_gemini(monkeypatch):
 
     monkeypatch.setattr(btc_ordinals, "fetch_recent_inscriptions",
                         lambda limit=15: feed)
+    monkeypatch.setattr(btc_ordinals, "BTC_ORDINALS_ENABLED", True)
     monkeypatch.setattr(btc_ordinals, "gemini_score_nft", fake_score)
     monkeypatch.setattr(btc_ordinals, "asend", fake_send)
     monkeypatch.setattr(btc_ordinals, "asend_photo", fake_send)

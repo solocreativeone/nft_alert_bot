@@ -4,7 +4,7 @@ from floor import check_floors
 from mint import check_mints
 from drops import check_drops, wire_healthy_rpcs
 from solana_drops import check_solana_drops
-from btc_ordinals import check_btc_ordinals
+from btc_ordinals import check_btc_ordinals, BTC_ORDINALS_ENABLED
 from commands import build_app
 import checkpoint
 
@@ -24,7 +24,10 @@ print(f"   Floor checks:      every {FLOOR_CHECK_INTERVAL} minutes")
 print(f"   Mint checks:       every {MINT_CHECK_INTERVAL} minute(s)")
 print(f"   EVM Drop checks:   every {DROPS_CHECK_INTERVAL} minutes")
 print(f"   Solana Drop checks:every {SOLANA_DROPS_CHECK_INTERVAL} minutes")
-print(f"   Bitcoin Ordinals:  every {BTC_CHECK_INTERVAL} minutes")
+if BTC_ORDINALS_ENABLED:
+    print(f"   Bitcoin Ordinals:  every {BTC_CHECK_INTERVAL} minutes")
+else:
+    print(f"   Bitcoin Ordinals:  DISABLED (set BTC_ORDINALS_ENABLED=true to enable)")
 print(f"   Commands:          /watch  /unwatch  /list  /status  /help")
 print("─" * 40)
 
@@ -60,7 +63,8 @@ async def main():
     asyncio.create_task(loop_task(MINT_CHECK_INTERVAL, check_mints))
     asyncio.create_task(loop_task(DROPS_CHECK_INTERVAL, check_drops))
     asyncio.create_task(loop_task(SOLANA_DROPS_CHECK_INTERVAL, check_solana_drops))
-    asyncio.create_task(loop_task(BTC_CHECK_INTERVAL, check_btc_ordinals))
+    if BTC_ORDINALS_ENABLED:
+        asyncio.create_task(loop_task(BTC_CHECK_INTERVAL, check_btc_ordinals))
 
     # Initialize and run telegram bot
     await app.initialize()

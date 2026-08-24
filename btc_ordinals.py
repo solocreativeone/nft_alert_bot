@@ -18,11 +18,16 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from notifier import asend, asend_photo, download_image_bytes, escape_html
 from gemini_filter import gemini_score_nft, is_worth_alerting, verdict_badge
 import checkpoint
+import bot_settings
 
 try:
     from private.config_live import GEMINI_MIN_SCORE
 except ImportError:
     from config import GEMINI_MIN_SCORE
+
+# Resolved separately from the import above. Adding a name to that statement would
+# make one missing value discard the entire private config, real API keys included.
+BTC_ORDINALS_ENABLED = bot_settings.get_bool("BTC_ORDINALS_ENABLED", False)
 
 # Public Ordinals API endpoints with automatic failover
 ORDINALS_APIS = [
@@ -197,6 +202,8 @@ def parse_inscription_item(item: dict) -> dict:
 
 async def check_btc_ordinals():
     """Main scanning loop for Bitcoin Ordinals & Inscriptions."""
+    if not BTC_ORDINALS_ENABLED:
+        return
     try:
         inscriptions = await asyncio.to_thread(fetch_recent_inscriptions, 15)
         if not inscriptions:

@@ -24,6 +24,13 @@ GEMINI_DAILY_LIMIT = int(os.environ.get("GEMINI_DAILY_LIMIT", 500))
 # Gemini AI filter — skip contracts scoring below this (0 = off, 100 = all blocked)
 GEMINI_MIN_SCORE = int(os.environ.get("GEMINI_MIN_SCORE", 40))
 
+# Bitcoin Ordinals scanner. Disabled by default: the recent-inscriptions feed is
+# dominated by BRC-20 token operations and other non-art text, which are not NFTs
+# and burned the Gemini quota. Opt in with BTC_ORDINALS_ENABLED=true once the
+# scanner does meaningful per-inscription filtering.
+BTC_ORDINALS_ENABLED = os.environ.get(
+    "BTC_ORDINALS_ENABLED", "false").strip().lower() in ("true", "1", "yes", "on")
+
 # Collections to watch — add as many as you like
 COLLECTIONS = [
     # Uncomment and fill in your collections
