@@ -213,27 +213,41 @@ _ALCHEMY_SUBDOMAINS = {
     "optimism": "opt-mainnet",
 }
 
-PROBE_TIMEOUT = 6
+# Probe latency, measured against real public endpoints under concurrency:
+# base.drpc.org and base.gateway.tenderly.co both needed ~11.5s. A 6s timeout
+# reported healthy endpoints as failures, which emptied the healthy list for that
+# chain and let an over-quota Alchemy endpoint keep first position.
+PROBE_TIMEOUT = 15
 # Hard wall-clock cap on the whole startup probe. requests' `timeout` is an
 # inter-byte read timeout, not a total duration, so a provider that dribbles a
 # 15k-log response back can hold a single probe open far longer (38.7s observed).
 # Probing serially cost 390s of startup, delaying the first scan by 6.5 minutes.
-PROBE_TOTAL_BUDGET = 45
-PROBE_CONCURRENCY = 12
+PROBE_TOTAL_BUDGET = 75
+# 12 parallel eth_getLogs calls saturated a home connection and manufactured the
+# very timeouts the probe was meant to detect. Modest concurrency is more accurate.
+PROBE_CONCURRENCY = 6
 
 
 def probe_rpc_endpoint(url: str, timeout: int = PROBE_TIMEOUT,
-                       block_step: Optional[int] = None) -> bool:
-    """Return True only if the endpoint can serve the query the bot actually makes.
+                       block_step: Optional[int] = None) -> Optional[bool]:
+    """Probe an endpoint with the query the bot actually makes.
 
-    Probes eth_getLogs, not eth_blockNumber. That distinction matters: both
-    mainnet.base.org and mainnet.optimism.io answer eth_blockNumber with HTTP 200
-    and then fail eth_getLogs with "backend response too large" (base took 50.9s
-    to do it). A liveness check on the cheap method promotes exactly the endpoints
-    that cannot do the work.
+    Returns a tri-state, because "refused" and "unreachable" are different facts
+    and collapsing them promotes broken endpoints:
 
-    Deliberately strict: a 200 carrying a JSON-RPC error body is a failure, since
-    providers signal quota and range limits that way.
+        True  - served eth_getLogs. Usable.
+        False - answered and refused: HTTP 429/403/500, or a JSON-RPC error body.
+                A verdict from the endpoint itself.
+        None  - no answer: timeout, DNS failure, connection refused. Says nothing
+                about the endpoint, so it must not be treated as a verdict.
+
+    Probes eth_getLogs, not eth_blockNumber. Both mainnet.base.org and
+    mainnet.optimism.io answer eth_blockNumber with HTTP 200 and then fail
+    eth_getLogs with "backend response too large" (base took 50.9s to do it), so
+    a liveness check on the cheap method selects for endpoints that cannot work.
+
+    Deliberately strict about error bodies: providers signal quota and range
+    limits inside a 200 response.
     """
     if not url or "YOUR_KEY" in url:
         return False
@@ -245,11 +259,14 @@ def probe_rpc_endpoint(url: str, timeout: int = PROBE_TIMEOUT,
             json={"jsonrpc": "2.0", "id": 1, "method": "eth_blockNumber", "params": []},
             timeout=timeout,
         )
-        if res.status_code != 200:
-            return False
+    except Exception:
+        return None          # never reached it
+    if res.status_code != 200:
+        return False         # it answered, and refused
+    try:
         tip = int(res.json()["result"], 16)
     except Exception:
-        return False
+        return False         # answered with something unusable
 
     payload = {
         "jsonrpc": "2.0",
@@ -263,8 +280,11 @@ def probe_rpc_endpoint(url: str, timeout: int = PROBE_TIMEOUT,
     }
     try:
         res = requests.post(url, json=payload, timeout=timeout)
-        if res.status_code != 200:
-            return False
+    except Exception:
+        return None
+    if res.status_code != 200:
+        return False
+    try:
         data = res.json()
     except Exception:
         return False
@@ -275,14 +295,23 @@ def probe_rpc_endpoint(url: str, timeout: int = PROBE_TIMEOUT,
 
 def reorder_rpcs_by_health(rpcs, probe=probe_rpc_endpoint, block_step: Optional[int] = None,
                            health=None):
-    """Put endpoints that answer first, preserving relative order within each group.
+    """Order endpoints by what we actually learned about them.
 
-    Deduplicates. Unhealthy endpoints are kept as last-resort fallbacks, and if
-    nothing answers the original list is returned unchanged: a suboptimal order
-    is still better than having no endpoints at all.
+    Three tiers, each preserving configured order within itself:
 
-    `health` accepts a precomputed {url: bool} map so callers can probe every
-    chain concurrently and reuse the results here.
+        healthy (True)   - proven able to serve a scan
+        unknown (None)   - never reached, so no evidence either way
+        refusing (False) - answered and refused; a definitive verdict
+
+    A refusing endpoint sinks below an unknown one. That direction matters: an
+    over-quota endpoint that answers 429 can never serve a scan, while a timeout
+    may be a transient network problem on our side.
+
+    Nothing is ever dropped. If we learned nothing at all, configured order is
+    returned untouched rather than invented.
+
+    `health` accepts a precomputed {url: True|False|None} map so callers can probe
+    every chain concurrently and reuse the verdicts here.
     """
     seen = set()
     unique = []
@@ -291,22 +320,27 @@ def reorder_rpcs_by_health(rpcs, probe=probe_rpc_endpoint, block_step: Optional[
             seen.add(url)
             unique.append(url)
 
-    def is_healthy(url):
+    def verdict(url):
         if health is not None:
-            return health.get(url, False)
+            return health.get(url)
         try:
             return probe(url, block_step=block_step)
         except TypeError:
             return probe(url)
 
-    healthy, unhealthy = [], []
+    healthy, unknown, refusing = [], [], []
     for url in unique:
-        (healthy if is_healthy(url) else unhealthy).append(url)
+        v = verdict(url)
+        (healthy if v is True else refusing if v is False else unknown).append(url)
 
-    if not healthy:
-        print("[Drops] ⚠️  No RPC endpoint passed the health probe; keeping configured order")
+    if not healthy and not refusing:
+        print("[Drops] ⚠️  Health probe was inconclusive for every endpoint; "
+              "keeping configured order")
         return unique
-    return healthy + unhealthy
+    if not healthy:
+        print("[Drops] ⚠️  No endpoint passed the health probe; "
+              "runtime failover will pick a working one")
+    return healthy + unknown + refusing
 
 
 def wire_healthy_rpcs(chains=None, probe=probe_rpc_endpoint,
@@ -354,11 +388,12 @@ def wire_healthy_rpcs(chains=None, probe=probe_rpc_endpoint,
         for future in as_completed(futures, timeout=None):
             url = futures[future]
             try:
-                health[url] = bool(future.result(timeout=0))
+                result = future.result(timeout=0)
             except Exception:
-                # Could not determine health: treat as untested rather than
-                # unhealthy, so a probe error cannot demote a working endpoint.
-                health[url] = None
+                result = None
+            # Preserve the tri-state: True/False are verdicts, None means we
+            # learned nothing. Coercing None to False promotes broken endpoints.
+            health[url] = result if result is None else bool(result)
             if time.monotonic() > deadline:
                 break
 
@@ -370,17 +405,12 @@ def wire_healthy_rpcs(chains=None, probe=probe_rpc_endpoint,
             health[url] = None
 
     for chain, urls in candidates.items():
-        tested = [u for u in urls if health.get(u) is not None]
-        if not tested:
-            EVM_CHAINS[chain]["rpcs"] = urls
-            continue
-        # Endpoints we never got to are treated as untested, not unhealthy, so a
-        # budget cutoff cannot demote a good endpoint below a known-bad one.
-        merged = {u: health.get(u) is not False for u in urls}
-        ordered = reorder_rpcs_by_health(urls, health=merged)
+        ordered = reorder_rpcs_by_health(urls, health=health)
         EVM_CHAINS[chain]["rpcs"] = ordered
         first = "alchemy" if "alchemy" in ordered[0] else ordered[0].split("//")[-1][:28]
-        print(f"[Drops] RPC {chain}: preferring {first}")
+        verdict = health.get(ordered[0])
+        tag = "verified" if verdict is True else "unverified"
+        print(f"[Drops] RPC {chain}: preferring {first} ({tag})")
 
 
 ALL_SUPPORTED_CHAINS = list(EVM_CHAINS.keys())

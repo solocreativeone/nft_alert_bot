@@ -131,22 +131,26 @@ def test_probe_rejects_unparseable_body(monkeypatch):
 
 
 def test_probe_swallows_connection_error(monkeypatch):
-    """rpc.builder0x69.io raised ConnectionError in the live probe."""
+    """rpc.builder0x69.io raised ConnectionError in the live probe.
+
+    Unreachable is inconclusive, not a verdict: see test_drops_rpc_verdicts.py.
+    """
     def boom():
         raise drops.requests.exceptions.ConnectionError("refused")
 
     monkeypatch.setattr(drops.requests, "post", _mock_post({"eth_blockNumber": boom}))
-    assert drops.probe_rpc_endpoint("https://rpc.builder0x69.io") is False
+    assert drops.probe_rpc_endpoint("https://rpc.builder0x69.io") is None
 
 
 def test_probe_survives_dns_failure(monkeypatch):
-    """A phone/laptop losing DNS must not crash startup."""
+    """A phone/laptop losing DNS must not crash startup, and must not be recorded
+    as a verdict against the endpoint."""
     def boom():
         raise drops.requests.exceptions.ConnectionError(
             "Failed to resolve 'mainnet.optimism.io'")
 
     monkeypatch.setattr(drops.requests, "post", _mock_post({"eth_blockNumber": boom}))
-    assert drops.probe_rpc_endpoint("https://mainnet.optimism.io") is False
+    assert drops.probe_rpc_endpoint("https://mainnet.optimism.io") is None
 
 
 def test_probe_never_raises_on_placeholder_url():
@@ -465,8 +469,13 @@ def test_probe_exception_is_not_fatal(monkeypatch):
 
 
 def test_probe_budget_default_is_bounded():
-    """Guards against a regression to unbounded serial probing."""
-    assert drops.PROBE_TOTAL_BUDGET <= 60
+    """Guards against a regression to unbounded serial probing.
+
+    The budget must stay bounded but also allow a full pass: at PROBE_TIMEOUT=15
+    with 6-way concurrency over ~33 endpoints, too tight a budget cuts off
+    mid-sweep and the probe learns nothing. See test_total_budget_allows_a_full_pass.
+    """
+    assert drops.PROBE_TOTAL_BUDGET <= 120
     assert drops.PROBE_CONCURRENCY > 1
 
 
