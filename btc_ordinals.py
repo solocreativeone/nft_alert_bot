@@ -8,6 +8,7 @@ Scans the Bitcoin blockchain in real-time for fresh Ordinal inscriptions:
 - Delivers instant Telegram photo alerts with Magic Eden BTC and Ordinals.com links
 """
 import asyncio
+import re
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -37,8 +38,32 @@ alerted_ordinals_set = set()
 alerted_ordinals_deque = deque(maxlen=MAX_ALERTED_ORDINALS)
 
 
+def _parse_inscription_number(text: str) -> int:
+    """Pull the inscription number out of listing link text.
+
+    ordinals.com renders links as "Inscription 91234567". The number was
+    previously hardcoded to 0, so every alert was titled "Ordinal #0". Returns 0
+    only when the text genuinely carries no number.
+    """
+    if not text:
+        return 0
+    match = re.search(r"(\d[\d,]*)", text)
+    if not match:
+        return 0
+    try:
+        return int(match.group(1).replace(",", ""))
+    except ValueError:
+        return 0
+
+
 def fetch_recent_inscriptions(limit: int = 15) -> list:
-    """Fetch recent Bitcoin inscriptions directly from official Ordinals indexer."""
+    """Fetch recent Bitcoin inscriptions directly from official Ordinals indexer.
+
+    Parses the inscription number out of the link text rather than reporting 0 for
+    everything, and leaves content_type empty because this HTML listing does not
+    carry one. Claiming "image/*" here defeated extension detection downstream and
+    made Telegram reject every photo with Image_process_failed.
+    """
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -59,8 +84,8 @@ def fetch_recent_inscriptions(limit: int = 15) -> list:
                     inscriptions.append({
                         "id": iid,
                         "inscription_id": iid,
-                        "number": 0,
-                        "content_type": "image/*",
+                        "number": _parse_inscription_number(a.get_text()),
+                        "content_type": "",
                         "address": "",
                         "tx_id": tx_id,
                         "image_url": f"https://ordinals.com/content/{iid}",

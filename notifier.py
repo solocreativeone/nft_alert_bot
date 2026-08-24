@@ -6,6 +6,7 @@ imported without a TELEGRAM_TOKEN present — this is what makes them testable.
 import asyncio
 import base64
 import io
+from typing import Optional
 from urllib.parse import unquote
 
 from telegram import Bot
@@ -94,8 +95,35 @@ def _rasterize_svg(svg_bytes):
         return None
 
 
+def _sniff_image_kind(data: bytes) -> Optional[str]:
+    """Return an extension for recognised bitmap magic bytes, else None.
+
+    Magic bytes are the only trustworthy signal. Declared content types are
+    routinely wrong: the ordinals.com scraper reports "image/*" for every
+    inscription, and IPFS gateways return HTML error pages with image types.
+    """
+    if not data:
+        return None
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
 def _guess_extension(content_type: str, data: bytes) -> str:
-    """Pick a filename extension so Telegram can detect the image format."""
+    """Pick a filename extension so Telegram can detect the image format.
+
+    Magic bytes win over the declared type. Falls back to "png" only for callers
+    that have already established the payload is an image.
+    """
+    sniffed = _sniff_image_kind(data)
+    if sniffed:
+        return sniffed
     ct = (content_type or "").lower()
     if "png" in ct:
         return "png"
@@ -105,21 +133,18 @@ def _guess_extension(content_type: str, data: bytes) -> str:
         return "gif"
     if "webp" in ct:
         return "webp"
-    # Fall back to magic-byte sniffing.
-    if data[:8] == b"\x89PNG\r\n\x1a\n":
-        return "png"
-    if data[:3] == b"\xff\xd8\xff":
-        return "jpg"
-    if data[:6] in (b"GIF87a", b"GIF89a"):
-        return "gif"
-    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return "webp"
     return "png"
 
 
 def _finalize_image(data: bytes, content_type: str = ""):
     """Turn raw image bytes into a Telegram-ready BytesIO (SVG->PNG, correct
-    filename set), or None if it can't be turned into a sendable photo."""
+    filename set), or None if it can't be turned into a sendable photo.
+
+    Rejects anything whose bytes are not a supported bitmap. Sending unverified
+    bytes is what produced Telegram's Image_process_failed on 13 of 13 Ordinal
+    alerts: inscriptions are frequently text, HTML, or video, and a declared
+    content type of "image/*" carries no subtype to catch that.
+    """
     if not data:
         return None
     ct = (content_type or "").lower()
@@ -130,11 +155,17 @@ def _finalize_image(data: bytes, content_type: str = ""):
             return None
         data = png
         ct = "image/png"
+    kind = _sniff_image_kind(data)
+    if not kind:
+        preview = data[:16]
+        print(f"[Image] Not a supported image; refusing to send as photo "
+              f"(declared: {content_type or 'none'}, {len(data)} bytes, starts {preview!r})")
+        return None
     if len(data) > MAX_IMAGE_BYTES:
         print(f"[Image] Skipping oversized image ({len(data)} bytes > {MAX_IMAGE_BYTES})")
         return None
     bio = io.BytesIO(data)
-    bio.name = f"image.{_guess_extension(ct, data)}"
+    bio.name = f"image.{kind}"
     bio.seek(0)
     return bio
 
