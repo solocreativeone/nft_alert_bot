@@ -8,7 +8,6 @@ import os
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")    # From @BotFather
 CHAT_ID = os.environ.get("CHAT_ID")                  # Your Telegram chat ID
 OPENSEA_API_KEY = os.environ.get("OPENSEA_API_KEY")  # From opensea.io/developers
-ALCHEMY_API_KEY = os.environ.get("ALCHEMY_API_KEY")  # From alchemy.com
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")    # From aistudio.google.com
 
 # Extra Gemini keys for daily-quota rotation. Each free-tier key allows roughly

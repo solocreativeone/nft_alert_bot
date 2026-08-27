@@ -68,7 +68,7 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     contract = context.args[0].strip()
     chain = context.args[1].strip().lower() if len(context.args) > 1 else "ethereum"
 
-    supported_chains = ["ethereum", "polygon", "base", "arbitrum", "optimism", "zora", "robinhood"]
+    supported_chains = ["ethereum", "polygon", "base", "arbitrum", "optimism", "robinhood"]
     if chain not in supported_chains:
          await update.message.reply_text(f"❌ Unsupported chain. Supported chains: {', '.join(supported_chains)}")
          return

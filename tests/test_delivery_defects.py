@@ -231,24 +231,25 @@ def test_missing_dex_data_never_blocks_an_alert(monkeypatch):
 def test_refusing_endpoint_stays_last_even_when_chain_is_unprobed(monkeypatch):
     """Live regression: "[Drops] RPC base: preferring alchemy (unverified)".
 
-    Alchemy answers 429 on base. Even when every other endpoint for that chain
-    goes unprobed, a known refusal must not be promoted.
+    A refusing endpoint (one that answered 429/403) must sink below endpoints we
+    never got a verdict for, including when the budget cuts the sweep short. A
+    refusal is a fact; an unprobed endpoint is only a maybe, and a maybe outranks
+    a known no.
     """
     import drops
 
+    refusing = "https://over-quota.example"
     monkeypatch.setitem(
         drops.EVM_CHAINS, "testchain",
-        {"rpcs": ["https://public-a.example", "https://public-b.example"],
+        {"rpcs": [refusing, "https://public-a.example", "https://public-b.example"],
          "explorer": "https://x", "opensea_chain": None, "block_step": 60},
     )
-    monkeypatch.setitem(drops._ALCHEMY_SUBDOMAINS, "testchain", "testchain-mainnet")
-    monkeypatch.setattr(drops, "ALCHEMY_API_KEY", "overquota")
-    alchemy = "https://testchain-mainnet.g.alchemy.com/v2/overquota"
 
-    # Alchemy answers fast with a refusal; the public endpoints never answer.
+    # The refusing endpoint answers fast with a verdict; the others never answer.
     def probe(url, **kw):
-        return False if url == alchemy else None
+        return False if url == refusing else None
 
     drops.wire_healthy_rpcs(chains=["testchain"], probe=probe, budget=0)
-    assert drops.EVM_CHAINS["testchain"]["rpcs"][0] != alchemy
-    assert drops.EVM_CHAINS["testchain"]["rpcs"][-1] == alchemy
+    rpcs = drops.EVM_CHAINS["testchain"]["rpcs"]
+    assert rpcs[0] != refusing
+    assert rpcs[-1] == refusing

@@ -1,6 +1,7 @@
 from curl_cffi import requests
 from bs4 import BeautifulSoup
 import asyncio
+from datetime import datetime, timezone
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 import dedup
@@ -13,6 +14,37 @@ NFTCALENDAR_CHAINS = {
     "base":     "https://nftcalendar.io/b/base/",
     "solana":   "https://nftcalendar.io/b/solana/",
 }
+
+# Junk filters. Moved here from calendar_tracker.py, which was deleted as dead
+# code: nothing imported it and check_calendar() was never scheduled. These two
+# helpers were the only part worth keeping, and this module is the live consumer
+# of NFTCalendar data, so they now filter results that actually reach a user.
+JUNK_NAMES = ["test", "miant", "spam", "airdrop", "fake", "scam"]
+MIN_NAME_LENGTH = 3
+
+
+def is_junk(name, slug_or_url):
+    """Filter out test collections, unnamed contracts, and spam."""
+    if not name:
+        return True
+    if name.startswith("0x") and len(name) > 10:
+        return True
+    if len(name.strip()) < MIN_NAME_LENGTH:
+        return True
+    return any(kw in name.lower() for kw in JUNK_NAMES)
+
+
+def is_within_age(created, max_hours=72):
+    """Return True if the collection was created within max_hours."""
+    if not created:
+        return False
+    try:
+        created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+        age_hours = (datetime.now(timezone.utc) - created_dt).total_seconds() / 3600
+        return age_hours <= max_hours
+    except Exception:
+        return False
+
 
 def scrape_nftcalendar(url, chain):
     """
@@ -70,8 +102,12 @@ def scrape_nftcalendar(url, chain):
             img_tag = outer_card.find("img")
             image_url = img_tag.get("src") or img_tag.get("data-src") if img_tag else None
 
+            name = h2.get_text(strip=True)
+            if is_junk(name, full_link):
+                continue
+
             drops.append({
-                "name": h2.get_text(strip=True),
+                "name": name,
                 "slug": slug,
                 "link": full_link,
                 "date": date_text,

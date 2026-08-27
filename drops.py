@@ -16,11 +16,11 @@ from metadata_resolver import resolve_metadata_async
 import checkpoint
 
 try:
-    from private.config_live import ALCHEMY_API_KEY, MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE, MAX_CONTRACT_AGE_HOURS
+    from private.config_live import MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE, MAX_CONTRACT_AGE_HOURS
     print("[Drops] ✅ Private config loaded")
 except ImportError as e:
     print(f"[Drops] ❌ ImportError: {e}")
-    from config import ALCHEMY_API_KEY, MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE, MAX_CONTRACT_AGE_HOURS
+    from config import MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE, MAX_CONTRACT_AGE_HOURS
 
 # Track contracts we've already alerted on with bounded cache. The in-memory pair
 # is a fast path; checkpoint.py holds the durable copy that survives restarts.
@@ -114,15 +114,6 @@ EVM_CHAINS = {
         "opensea_chain": "base",
         "block_step": 60,
     },
-    "zora": {
-        "rpcs": [
-            "https://rpc.zora.energy",
-            "https://zora.drpc.org",
-        ],
-        "explorer": "https://explorer.zora.energy",
-        "opensea_chain": "zora",
-        "block_step": 60,
-    },
     "ethereum": {
         "rpcs": [
             "https://gateway.tenderly.co/public/mainnet",
@@ -205,18 +196,18 @@ EVM_CHAINS = {
 # So ordering is decided by a one-off health probe at startup rather than by
 # configuration. Unhealthy endpoints are demoted to the back rather than dropped,
 # so a transient failure at startup cannot permanently lose an endpoint.
-_ALCHEMY_SUBDOMAINS = {
-    "ethereum": "eth-mainnet",
-    "base": "base-mainnet",
-    "polygon": "polygon-mainnet",
-    "arbitrum": "arb-mainnet",
-    "optimism": "opt-mainnet",
-}
+#
+# Alchemy used to be prepended to five chains here. It was removed after a live
+# probe: ethereum, base and arbitrum returned HTTP 429 "Monthly capacity limit
+# exceeded", while polygon and optimism returned HTTP 403 "not enabled for this
+# app", meaning those two never worked at all. No Alchemy enhanced API was ever
+# used (no getAssetTransfers, no nft/v3, no alchemy_* methods) - only standard
+# JSON-RPC that the public endpoints serve with byte-identical results.
 
 # Probe latency, measured against real public endpoints under concurrency:
 # base.drpc.org and base.gateway.tenderly.co both needed ~11.5s. A 6s timeout
 # reported healthy endpoints as failures, which emptied the healthy list for that
-# chain and let an over-quota Alchemy endpoint keep first position.
+# chain and let a refusing endpoint keep first position.
 PROBE_TIMEOUT = 15
 # Hard wall-clock cap on the whole startup probe. requests' `timeout` is an
 # inter-byte read timeout, not a total duration, so a provider that dribbles a
@@ -361,20 +352,13 @@ def wire_healthy_rpcs(chains=None, probe=probe_rpc_endpoint,
     is why an unfinished probe is safe to abandon.
     """
     targets = list(EVM_CHAINS.keys()) if chains is None else chains
-    key = (ALCHEMY_API_KEY or "").strip()
-    use_alchemy = bool(key) and "YOUR_KEY" not in key
 
     candidates = {}
     for chain in targets:
         cfg = EVM_CHAINS.get(chain)
         if not cfg:
             continue
-        urls = list(cfg["rpcs"])
-        if use_alchemy and chain in _ALCHEMY_SUBDOMAINS:
-            alchemy_url = f"https://{_ALCHEMY_SUBDOMAINS[chain]}.g.alchemy.com/v2/{key}"
-            if alchemy_url not in urls:
-                urls.insert(0, alchemy_url)
-        candidates[chain] = urls
+        candidates[chain] = list(cfg["rpcs"])
 
     jobs = {url: EVM_CHAINS[chain].get("block_step")
             for chain, urls in candidates.items() for url in urls}
@@ -425,7 +409,7 @@ def wire_healthy_rpcs(chains=None, probe=probe_rpc_endpoint,
     for chain, urls in candidates.items():
         ordered = reorder_rpcs_by_health(urls, health=health)
         EVM_CHAINS[chain]["rpcs"] = ordered
-        first = "alchemy" if "alchemy" in ordered[0] else ordered[0].split("//")[-1][:28]
+        first = ordered[0].split("//")[-1][:28]
         verdict = health.get(ordered[0])
         tag = "verified" if verdict is True else "unverified"
         print(f"[Drops] RPC {chain}: preferring {first} ({tag})")

@@ -7,7 +7,6 @@ load_dotenv()
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 OPENSEA_API_KEY = os.environ.get("OPENSEA_API_KEY")
-ALCHEMY_API_KEY = os.environ.get("ALCHEMY_API_KEY")
 GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY")
 
 # Additional Gemini keys for quota rotation. Each free-tier key is capped per day,

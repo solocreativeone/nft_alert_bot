@@ -118,7 +118,6 @@ Create a `.env` file in the project root:
 TELEGRAM_TOKEN=your_telegram_bot_token_here
 CHAT_ID=your_telegram_chat_id_here
 OPENSEA_API_KEY=your_opensea_api_key_here
-ALCHEMY_API_KEY=your_alchemy_api_key_here
 GEMINI_API_KEY=your_gemini_api_key_here
 GEMINI_MIN_SCORE=40
 
@@ -135,7 +134,6 @@ Modify `config.py` in the root directory, or copy to `private/config_live.py` (w
 TELEGRAM_TOKEN = "your_telegram_bot_token_here"
 CHAT_ID = "your_telegram_chat_id_here"
 OPENSEA_API_KEY = "your_opensea_api_key_here"
-ALCHEMY_API_KEY = "your_alchemy_api_key_here"
 GEMINI_API_KEY = "your_gemini_api_key_here"
 GEMINI_MIN_SCORE = 40
 
@@ -195,7 +193,6 @@ Manage your watchlist directly from Telegram without editing config files:
    - `TELEGRAM_TOKEN`
    - `CHAT_ID`
    - `OPENSEA_API_KEY`
-   - `ALCHEMY_API_KEY`
    - `GEMINI_API_KEY`
    - `GEMINI_MIN_SCORE` (e.g. `40`)
 5. Railway will deploy from `railway.toml` and keep the bot running 24/7.
@@ -210,8 +207,7 @@ Manage your watchlist directly from Telegram without editing config files:
 - `dex_liquidity.py`: Real-time DEX pool and volume detector powered by DexScreener.
 - `drops.py`: Multi-chain mint detector, metadata reader, and batched Robinhood RPC handler.
 - `notifier.py`: Shared async Telegram notification dispatcher for text and photos.
-- `live_drops.py`: Scrapes upcoming mint events across chains from NFTCalendar.
-- `calendar_tracker.py`: Background scheduler for long-range drop tracking.
+- `live_drops.py`: Scrapes upcoming mint events across chains from NFTCalendar, powering `/live`.
 - `commands.py`: Telegram slash command handler (/watch, /live, /unwatch, /list).
 - `floor.py` / `mint.py`: Watchlist floor-price and mint-velocity trackers.
 - `watchlist.py`: Local persistence layer for watched collections.

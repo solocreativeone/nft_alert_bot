@@ -117,26 +117,24 @@ def test_getlogs_timeout_after_healthy_tip_is_inconclusive(monkeypatch):
 def test_refusing_endpoint_never_preferred_over_unreachable_one(monkeypatch):
     """The exact smoke-run failure, reduced.
 
-    Alchemy answers 429 (definitive). Every public endpoint times out
-    (inconclusive). Alchemy must not be preferred.
+    One endpoint answers 429 (a definitive refusal). Every other endpoint times
+    out (inconclusive). The refusing one must not be preferred.
     """
+    refusing = "https://over-quota.example"
     monkeypatch.setitem(
         drops.EVM_CHAINS, "testchain",
-        {"rpcs": ["https://public-a.example", "https://public-b.example"],
+        {"rpcs": [refusing, "https://public-a.example", "https://public-b.example"],
          "explorer": "https://x", "opensea_chain": None, "block_step": 60},
     )
-    monkeypatch.setitem(drops._ALCHEMY_SUBDOMAINS, "testchain", "testchain-mainnet")
-    monkeypatch.setattr(drops, "ALCHEMY_API_KEY", "overquota")
-    alchemy = "https://testchain-mainnet.g.alchemy.com/v2/overquota"
 
     def probe(url, **kw):
-        return False if url == alchemy else None
+        return False if url == refusing else None
 
     drops.wire_healthy_rpcs(chains=["testchain"], probe=probe)
     rpcs = drops.EVM_CHAINS["testchain"]["rpcs"]
-    assert rpcs[0] != alchemy, "an endpoint that answered 429 must never be tried first"
-    assert rpcs[-1] == alchemy, "a definitive refusal belongs last"
-    assert set(rpcs) == {alchemy, "https://public-a.example", "https://public-b.example"}
+    assert rpcs[0] != refusing, "an endpoint that answered 429 must never be tried first"
+    assert rpcs[-1] == refusing, "a definitive refusal belongs last"
+    assert set(rpcs) == {refusing, "https://public-a.example", "https://public-b.example"}
 
 
 def test_all_inconclusive_keeps_configured_order(monkeypatch):
@@ -147,7 +145,6 @@ def test_all_inconclusive_keeps_configured_order(monkeypatch):
         {"rpcs": list(urls), "explorer": "https://x",
          "opensea_chain": None, "block_step": 60},
     )
-    monkeypatch.setattr(drops, "ALCHEMY_API_KEY", "")
 
     drops.wire_healthy_rpcs(chains=["testchain"], probe=lambda url, **kw: None)
     assert drops.EVM_CHAINS["testchain"]["rpcs"] == urls
@@ -161,7 +158,6 @@ def test_all_definitively_bad_still_returns_every_endpoint(monkeypatch):
         {"rpcs": list(urls), "explorer": "https://x",
          "opensea_chain": None, "block_step": 60},
     )
-    monkeypatch.setattr(drops, "ALCHEMY_API_KEY", "")
 
     drops.wire_healthy_rpcs(chains=["testchain"], probe=lambda url, **kw: False)
     assert set(drops.EVM_CHAINS["testchain"]["rpcs"]) == set(urls)
@@ -179,7 +175,6 @@ def test_ordering_is_healthy_then_unknown_then_refusing(monkeypatch):
                   "https://works.example"],
          "explorer": "https://x", "opensea_chain": None, "block_step": 60},
     )
-    monkeypatch.setattr(drops, "ALCHEMY_API_KEY", "")
 
     drops.wire_healthy_rpcs(chains=["testchain"], probe=lambda url, **kw: verdicts[url])
     assert drops.EVM_CHAINS["testchain"]["rpcs"] == [

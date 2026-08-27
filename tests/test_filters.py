@@ -1,7 +1,7 @@
 from datetime import datetime, timezone, timedelta
 
 from notifier import escape_html
-from calendar_tracker import is_junk, is_within_age
+from live_drops import is_junk, is_within_age
 
 
 def test_escape_html_escapes_specials():

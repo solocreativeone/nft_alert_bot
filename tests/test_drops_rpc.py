@@ -229,7 +229,6 @@ def test_probe_receives_block_step_from_chain_config(monkeypatch):
         {"rpcs": ["https://a.example"], "explorer": "https://x",
          "opensea_chain": None, "block_step": 42},
     )
-    monkeypatch.setattr(drops, "ALCHEMY_API_KEY", "")
     drops.wire_healthy_rpcs(chains=["testchain"], probe=spy)
     assert got["https://a.example"] == 42
 
@@ -302,80 +301,10 @@ def test_wiring_leaves_unprobed_chains_untouched(monkeypatch):
     assert drops.EVM_CHAINS["ethereum"]["rpcs"] == original
 
 
-def test_unhealthy_alchemy_does_not_take_first_position(monkeypatch):
-    """Reproduces the shipped bug directly.
-
-    A configured key put Alchemy first even when that app was over quota (429)
-    or the network was never enabled (403).
-    """
-    monkeypatch.setitem(
-        drops.EVM_CHAINS, "testchain",
-        {"rpcs": ["https://public-a.example", "https://public-b.example"],
-         "explorer": "https://x", "opensea_chain": None, "block_step": 10},
-    )
-    alchemy = "https://testchain-mainnet.g.alchemy.com/v2/deadkey"
-    monkeypatch.setitem(drops._ALCHEMY_SUBDOMAINS, "testchain", "testchain-mainnet")
-    monkeypatch.setattr(drops, "ALCHEMY_API_KEY", "deadkey")
-
-    drops.wire_healthy_rpcs(
-        chains=["testchain"],
-        probe=_fixed_health({"https://public-a.example": True,
-                             "https://public-b.example": True}),
-    )
-    rpcs = drops.EVM_CHAINS["testchain"]["rpcs"]
-    assert rpcs[0] != alchemy, "an unhealthy Alchemy endpoint must not be tried first"
-    assert rpcs[0] == "https://public-a.example"
-
-
-def test_healthy_alchemy_is_preferred(monkeypatch):
-    """Self-healing: if the key starts working, Alchemy earns first position again."""
-    monkeypatch.setitem(
-        drops.EVM_CHAINS, "testchain",
-        {"rpcs": ["https://public-a.example"], "explorer": "https://x",
-         "opensea_chain": None, "block_step": 10},
-    )
-    alchemy = "https://testchain-mainnet.g.alchemy.com/v2/livekey"
-    monkeypatch.setitem(drops._ALCHEMY_SUBDOMAINS, "testchain", "testchain-mainnet")
-    monkeypatch.setattr(drops, "ALCHEMY_API_KEY", "livekey")
-
-    drops.wire_healthy_rpcs(
-        chains=["testchain"],
-        probe=_fixed_health({alchemy: True, "https://public-a.example": True}),
-    )
-    assert drops.EVM_CHAINS["testchain"]["rpcs"][0] == alchemy
-
-
-def test_no_alchemy_key_is_a_noop(monkeypatch):
-    """Existing behavior preserved: no key means no Alchemy URL is ever built."""
-    monkeypatch.setitem(
-        drops.EVM_CHAINS, "testchain",
-        {"rpcs": ["https://public-a.example"], "explorer": "https://x",
-         "opensea_chain": None, "block_step": 10},
-    )
-    monkeypatch.setitem(drops._ALCHEMY_SUBDOMAINS, "testchain", "testchain-mainnet")
-    monkeypatch.setattr(drops, "ALCHEMY_API_KEY", "")
-
-    drops.wire_healthy_rpcs(
-        chains=["testchain"], probe=_fixed_health({"https://public-a.example": True})
-    )
-    rpcs = drops.EVM_CHAINS["testchain"]["rpcs"]
-    assert not any("alchemy" in u for u in rpcs)
-
-
-def test_placeholder_alchemy_key_is_a_noop(monkeypatch):
-    monkeypatch.setitem(
-        drops.EVM_CHAINS, "testchain",
-        {"rpcs": ["https://public-a.example"], "explorer": "https://x",
-         "opensea_chain": None, "block_step": 10},
-    )
-    monkeypatch.setitem(drops._ALCHEMY_SUBDOMAINS, "testchain", "testchain-mainnet")
-    monkeypatch.setattr(drops, "ALCHEMY_API_KEY", "YOUR_KEY_HERE")
-
-    drops.wire_healthy_rpcs(
-        chains=["testchain"], probe=_fixed_health({"https://public-a.example": True})
-    )
-    assert not any("alchemy" in u for u in drops.EVM_CHAINS["testchain"]["rpcs"])
-
+# Alchemy-specific wiring tests were deleted with the integration itself. The
+# ordering behaviour they exercised is still covered generically below and in
+# tests/test_drops_rpc_verdicts.py, using neutral endpoint URLs: nothing about
+# healthy-before-unknown-before-refusing was Alchemy specific.
 
 # ── startup budget and concurrency ───────────────────────────────────────────
 #
@@ -392,7 +321,6 @@ def test_probing_is_concurrent_not_serial(monkeypatch):
         {"rpcs": [f"https://slow-{i}.example" for i in range(8)],
          "explorer": "https://x", "opensea_chain": None, "block_step": 10},
     )
-    monkeypatch.setattr(drops, "ALCHEMY_API_KEY", "")
 
     def slow_probe(url, **kw):
         _time.sleep(0.25)
@@ -414,7 +342,6 @@ def test_budget_cutoff_leaves_remaining_endpoints_untested(monkeypatch):
         {"rpcs": list(urls), "explorer": "https://x",
          "opensea_chain": None, "block_step": 10},
     )
-    monkeypatch.setattr(drops, "ALCHEMY_API_KEY", "")
 
     def crawling(url, **kw):
         _time.sleep(0.3)
@@ -435,7 +362,6 @@ def test_untested_endpoint_outranks_known_bad(monkeypatch):
         {"rpcs": ["https://known-bad.example", "https://never-probed.example"],
          "explorer": "https://x", "opensea_chain": None, "block_step": 10},
     )
-    monkeypatch.setattr(drops, "ALCHEMY_API_KEY", "")
 
     def probe(url, **kw):
         if url == "https://known-bad.example":
@@ -455,7 +381,6 @@ def test_probe_exception_is_not_fatal(monkeypatch):
         {"rpcs": ["https://raises.example", "https://ok.example"],
          "explorer": "https://x", "opensea_chain": None, "block_step": 10},
     )
-    monkeypatch.setattr(drops, "ALCHEMY_API_KEY", "")
 
     def probe(url, **kw):
         if url == "https://raises.example":
