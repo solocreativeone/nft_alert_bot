@@ -8,6 +8,7 @@ import os
 import json
 import asyncio
 from datetime import datetime, timezone
+from typing import Optional
 import requests
 
 DEPLOYERS_FILE = os.path.join(os.path.dirname(__file__), "deployers.json")
@@ -151,13 +152,155 @@ def _to_int(value):
         return None
 
 
-async def get_contract_creation_info(chain: str, contract_address: str, custom_rpc_chains: dict = None) -> dict:
-    """
-    Query a Blockscout / Etherscan-compatible explorer for a contract's creation
-    record via the getcontractcreation endpoint.
+# ── RPC-based contract creation lookup ────────────────────────────────────────
+# The previous implementation queried Etherscan/Blockscout getcontractcreation and
+# never worked. Probed live: the code built `https://etherscan.io/api?...`, which
+# answers {"status":"0","message":"NOTOK","result":"Invalid API URL endpoint, use
+# api.etherscan.io"}; with the host corrected it answers "You are using a deprecated
+# V1 endpoint, switch to Etherscan V2"; and Zora's Blockscout returns 404 for the
+# same path. So creator was always "" and deploy_ts always None, which is why Gemini
+# reported "unranked deployer" on every drop and Ethos had no address to look up.
+#
+# Resolving creation over the RPC endpoints the bot already uses needs no API keys,
+# no per-chain hostnames and no V2 migration. Verified against Etherscan ground
+# truth for BAYC: deploy block 12287507, creator 0xaba7161a7fb69c88e16ed9f455ce62b791ee4d03.
 
-    Returns whatever the explorer provides so callers can derive the contract's
-    TRUE deployment age (not the age of the earliest mint in a scan window):
+RPC_TIMEOUT = 8
+# Bounded search window. The bot only alerts on contracts newer than
+# MAX_CONTRACT_AGE_HOURS (48h, roughly 14,400 ethereum blocks and more on faster
+# chains), and drops.py already knows the block of the first mint it observed.
+# Searching further back would spend calls establishing a fact that cannot change
+# the outcome, since an older contract is skipped by the age gate anyway.
+DEFAULT_MAX_LOOKBACK = 120_000
+
+
+def _rpc_call(rpcs, method, params, timeout=RPC_TIMEOUT):
+    """POST a JSON-RPC call, trying each endpoint until one answers.
+
+    Returns the result, or None when no endpoint could answer. None means unknown
+    and must never be coerced into a value: a wrong creator is worse than no
+    creator because it feeds a reputation lookup and an AI verdict.
+    """
+    payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    for url in rpcs or []:
+        try:
+            res = requests.post(url, json=payload, timeout=timeout)
+            if res.status_code != 200:
+                continue
+            body = res.json()
+            if "error" in body:
+                continue
+            if "result" in body:
+                return body["result"]
+        except Exception:
+            continue
+    return None
+
+
+def _get_code_at_block(chain, address, block, rpcs=None):
+    """eth_getCode at a historical block. Returns the hex string, or None."""
+    tag = "latest" if block is None else hex(block)
+    return _rpc_call(rpcs, "eth_getCode", [address, tag])
+
+
+def _get_block_with_txs(chain, block_number, rpcs=None):
+    return _rpc_call(rpcs, "eth_getBlockByNumber", [hex(block_number), True],
+                     timeout=RPC_TIMEOUT * 2)
+
+
+def _get_receipt(chain, tx_hash, rpcs=None):
+    return _rpc_call(rpcs, "eth_getTransactionReceipt", [tx_hash])
+
+
+def _has_code(code) -> bool:
+    return bool(code) and code not in ("0x", "0x0")
+
+
+def find_creation_block(chain, contract, known_block, max_lookback=None,
+                        rpcs=None):
+    """Binary search for the first block where the contract has code.
+
+    `known_block` is a block where the contract is known to exist (drops.py passes
+    the block of the first mint it saw). Returns the creation block, or None when
+    it cannot be established inside the window.
+
+    Historical eth_getCode needs archive state. Most public endpoints serve it, but
+    a pruned node can answer misleadingly, so the lower bound is verified rather
+    than assumed: if code already exists at the bottom of the window the contract
+    predates it and None is returned instead of a wrong block.
+    """
+    if known_block is None:
+        return None
+    lookback = DEFAULT_MAX_LOOKBACK if max_lookback is None else max_lookback
+
+    if not _has_code(_get_code_at_block(chain, contract, known_block, rpcs=rpcs)):
+        # No code even where the caller saw activity: bad input or an RPC that
+        # cannot answer. Either way we know nothing.
+        return None
+
+    low = max(0, known_block - lookback)
+    if _has_code(_get_code_at_block(chain, contract, low, rpcs=rpcs)):
+        # Already deployed before the window opened, so it is older than the age
+        # gate cares about.
+        return None
+
+    high = known_block
+    while low < high:
+        mid = (low + high) // 2
+        code = _get_code_at_block(chain, contract, mid, rpcs=rpcs)
+        if code is None:
+            return None
+        if _has_code(code):
+            high = mid
+        else:
+            low = mid + 1
+    return low
+
+
+def extract_creation_from_block(chain, contract, block_number, rpcs=None):
+    """Pull creator, tx hash and timestamp out of the creation block.
+
+    Only transactions with to=None can create a contract, and the creating one is
+    identified by its receipt naming this contract address. The timestamp is
+    returned even when the creator cannot be matched, because the age gate only
+    needs the timestamp and a partial result still beats nothing.
+    """
+    empty = {"creator": "", "tx_hash": "", "deploy_block": None, "deploy_ts": None}
+    block = _get_block_with_txs(chain, block_number, rpcs=rpcs)
+    if not block:
+        return empty
+
+    result = {
+        "creator": "",
+        "tx_hash": "",
+        "deploy_block": block_number,
+        "deploy_ts": _to_int(block.get("timestamp")),
+    }
+
+    target = (contract or "").lower()
+    for tx in block.get("transactions", []):
+        if tx.get("to") is not None:
+            continue
+        receipt = _get_receipt(chain, tx.get("hash"), rpcs=rpcs)
+        if not receipt:
+            continue
+        created = (receipt.get("contractAddress") or "").lower()
+        if created and created == target:
+            result["creator"] = (tx.get("from") or "").lower()
+            result["tx_hash"] = (tx.get("hash") or "").lower()
+            break
+
+    return result
+
+
+async def get_contract_creation_info(chain: str, contract_address: str,
+                                     custom_rpc_chains: Optional[dict] = None,
+                                     known_block: Optional[int] = None) -> dict:
+    """
+    Resolve a contract's creation record over RPC.
+
+    Returns the data callers need to derive the contract's TRUE deployment age
+    (not the age of the earliest mint in a scan window):
 
         {
             "creator":      lowercase deployer address (str, "" if unknown),
@@ -165,58 +308,52 @@ async def get_contract_creation_info(chain: str, contract_address: str, custom_r
             "deploy_block": int block number, or None,
             "deploy_ts":    int unix timestamp, or None,
         }
+
+    `known_block` is a block where the contract is known to exist. When omitted the
+    current head is used, which still works but searches a wider window.
     """
     empty = {"creator": "", "tx_hash": "", "deploy_block": None, "deploy_ts": None}
     if not contract_address:
         return empty
 
-    explorer_base = ""
-    if custom_rpc_chains and chain in custom_rpc_chains:
-        explorer_base = custom_rpc_chains[chain].get("explorer", "")
-    elif chain == "robinhood":
-        explorer_base = "https://robinhoodchain.blockscout.com"
-
-    if not explorer_base:
+    chain_cfg = (custom_rpc_chains or {}).get(chain) or {}
+    rpcs = chain_cfg.get("rpcs") or []
+    if not rpcs:
         return empty
 
-    api_url = f"{explorer_base}/api?module=contract&action=getcontractcreation&contractaddresses={contract_address}"
+    def _resolve():
+        anchor = known_block
+        if anchor is None:
+            head = _rpc_call(rpcs, "eth_blockNumber", [])
+            anchor = _to_int(head)
+            if anchor is None:
+                return empty
+
+        block_number = find_creation_block(
+            chain=chain, contract=contract_address, known_block=anchor,
+            rpcs=rpcs)
+        if block_number is None:
+            return empty
+        return extract_creation_from_block(
+            chain=chain, contract=contract_address, block_number=block_number,
+            rpcs=rpcs)
 
     try:
-        def _fetch():
-            return requests.get(api_url, timeout=6)
-
-        res = await asyncio.to_thread(_fetch)
-        if res.status_code == 200:
-            data = res.json()
-            if data.get("status") == "1" and data.get("result"):
-                items = data["result"]
-                if isinstance(items, list) and len(items) > 0:
-                    item = items[0]
-                    creator = item.get("contractCreator") or item.get("creatorAddress") or ""
-                    tx_hash = (
-                        item.get("txHash")
-                        or item.get("creationTxHash")
-                        or item.get("transactionHash")
-                        or ""
-                    )
-                    return {
-                        "creator": creator.lower() if creator else "",
-                        "tx_hash": tx_hash.lower() if tx_hash else "",
-                        "deploy_block": _to_int(item.get("blockNumber")),
-                        "deploy_ts": _to_int(item.get("timestamp") or item.get("blockTimestamp")),
-                    }
+        return await asyncio.to_thread(_resolve)
     except Exception as e:
-        print(f"[DeployerCache] ⚠️ Creation-info lookup failed for {contract_address[:10]}...: {e}")
+        print(f"[DeployerCache] ⚠️ Creation lookup failed for {contract_address[:10]}...: {e}")
+        return empty
 
-    return empty
 
-
-async def get_contract_creator(chain: str, contract_address: str, custom_rpc_chains: dict = None) -> str:
+async def get_contract_creator(chain: str, contract_address: str,
+                               custom_rpc_chains: Optional[dict] = None,
+                               known_block: Optional[int] = None) -> str:
     """
     Return the contract creator/deployer address (lowercase), or "" if unknown.
 
     Thin backward-compatible wrapper over get_contract_creation_info() for callers
     that only need the deployer address.
     """
-    info = await get_contract_creation_info(chain, contract_address, custom_rpc_chains)
+    info = await get_contract_creation_info(
+        chain, contract_address, custom_rpc_chains, known_block=known_block)
     return info.get("creator", "")

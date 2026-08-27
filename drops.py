@@ -742,6 +742,7 @@ async def get_contract_data_batched(chain: str, contract_address: str, batch_txs
         "age_hours": age_hours,
         "standard": standard,
         "unique_minters": unique_minters,
+        "earliest_block": int(earliest_block_hex, 16) if earliest_block_hex else None,
     }
 
 
@@ -996,6 +997,7 @@ async def evaluate_contract_drop(chain: str, contract: str, txs: list, semaphore
         mint_count     = cd["mint_count"]
         standard       = cd["standard"]
         unique_minters = cd["unique_minters"]
+        earliest_block = cd.get("earliest_block")
 
         # ── Basic Filters ─────────────────────────────────────────────
         if age_hours > 24:
@@ -1028,15 +1030,16 @@ async def evaluate_contract_drop(chain: str, contract: str, txs: list, semaphore
             _remember_contract(contract)
             return
 
-        # ── Deployer Resolution + TRUE deployment age (one explorer call) ─
-        creation_info = await get_contract_creation_info(chain, contract, EVM_CHAINS)
+        # ── Deployer Resolution + TRUE deployment age (RPC) ────────────
+        creation_info = await get_contract_creation_info(
+            chain, contract, EVM_CHAINS, known_block=earliest_block)
         deployer_addr = creation_info.get("creator", "")
 
         # True-age gate: skip collections whose CONTRACT was deployed long ago,
         # even if they're minting right now. The mint-window age above can't catch
         # these — an old open-edition still minting always looks minutes-old. When
-        # the explorer can't give us a deploy timestamp, true_age is None and we
-        # fall back to the mint-window age check above (don't over-block).
+        # RPC can't give us a deploy timestamp, true_age is None and we fall back
+        # to the mint-window age check above (don't over-block).
         true_age_hours = await get_contract_age_hours(chain, contract, creation_info)
         if true_age_hours is not None and true_age_hours > MAX_CONTRACT_AGE_HOURS:
             print(f"[Drops] ⏭️ Skipped {short_contract} on {chain}: contract too old (deployed {true_age_hours}h ago)")

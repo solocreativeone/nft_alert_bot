@@ -83,109 +83,55 @@ def test_to_int_parses_decimal_hex_and_junk():
 
 
 # ── get_contract_creation_info / get_contract_creator ────────────────────────
+# These now resolve creation over RPC. The explorer-parsing tests were deleted with
+# the explorer implementation; the RPC behaviour is covered exhaustively in
+# tests/test_deployer_rpc.py. What remains here are the boundary cases that were the
+# only thing the old tests actually cared about: missing config and unknown chains.
 
-class _FakeResponse:
-    def __init__(self, payload, status_code=200):
-        self._payload = payload
-        self.status_code = status_code
-
-    def json(self):
-        return self._payload
+_RPC_CHAINS = {"testchain": {"rpcs": ["https://rpc.example"], "block_step": 60}}
 
 
-_CUSTOM_CHAINS = {"testchain": {"explorer": "https://explorer.example"}}
-
-
-def test_creation_info_parses_full_record(monkeypatch):
-    payload = {
-        "status": "1",
-        "message": "OK",
-        "result": [
-            {
-                "contractAddress": "0xCONTRACT",
-                "contractCreator": "0xDEPLOYERabc",
-                "txHash": "0xTXHASH123",
-                "blockNumber": "12345678",
-                "timestamp": "1700000000",
-            }
-        ],
-    }
-    monkeypatch.setattr(
-        deployer_cache.requests, "get", lambda *a, **k: _FakeResponse(payload)
-    )
-
-    info = asyncio.run(
-        deployer_cache.get_contract_creation_info("testchain", "0xCONTRACT", _CUSTOM_CHAINS)
-    )
-    # Addresses/hashes are lowercased.
-    assert info["creator"] == "0xdeployerabc"
-    assert info["tx_hash"] == "0xtxhash123"
-    assert info["deploy_block"] == 12345678
-    assert info["deploy_ts"] == 1700000000
-
-
-def test_creation_info_handles_alt_field_names(monkeypatch):
-    # Some Blockscout variants use creatorAddress / creationTxHash / blockTimestamp.
-    payload = {
-        "status": "1",
-        "result": [
-            {
-                "creatorAddress": "0xCreator2",
-                "creationTxHash": "0xTx2",
-                "blockNumber": "0x64",  # hex -> 100
-                "blockTimestamp": "1699999999",
-            }
-        ],
-    }
-    monkeypatch.setattr(
-        deployer_cache.requests, "get", lambda *a, **k: _FakeResponse(payload)
-    )
-
-    info = asyncio.run(
-        deployer_cache.get_contract_creation_info("testchain", "0xCONTRACT", _CUSTOM_CHAINS)
-    )
-    assert info["creator"] == "0xcreator2"
-    assert info["tx_hash"] == "0xtx2"
-    assert info["deploy_block"] == 100
-    assert info["deploy_ts"] == 1699999999
-
-
-def test_creation_info_empty_when_no_explorer(monkeypatch):
-    # An unknown chain with no custom explorer must short-circuit to empty without
-    # making any HTTP call.
+def test_creation_info_empty_when_no_rpc_config(monkeypatch):
     def _boom(*a, **k):
-        raise AssertionError("should not hit the network without an explorer")
+        raise AssertionError("should not hit the network without an rpc")
 
-    monkeypatch.setattr(deployer_cache.requests, "get", _boom)
-
+    monkeypatch.setattr(deployer_cache, "_rpc_call", _boom)
     info = asyncio.run(
-        deployer_cache.get_contract_creation_info("unknownchain", "0xCONTRACT")
+        deployer_cache.get_contract_creation_info("unknownchain", "0xCONTRACT", {})
     )
     assert info == {"creator": "", "tx_hash": "", "deploy_block": None, "deploy_ts": None}
 
 
-def test_creation_info_empty_on_error_status(monkeypatch):
-    payload = {"status": "0", "message": "NOTOK", "result": "No data found"}
-    monkeypatch.setattr(
-        deployer_cache.requests, "get", lambda *a, **k: _FakeResponse(payload)
-    )
+def test_creation_info_returns_full_record_over_rpc(monkeypatch):
+    """End-to-end with a stubbed RPC: creation resolved, creator lowercased."""
+    def fake_rpc(rpcs, method, params, timeout=deployer_cache.RPC_TIMEOUT):
+        if method == "eth_getCode":
+            block = int(params[1], 16) if params[1] != "latest" else 10**9
+            return "0x60806040" if block >= 100 else "0x"
+        if method == "eth_blockNumber":
+            return "0x64"  # 100
+        if method == "eth_getBlockByNumber":
+            return {"timestamp": "0x6553f100", "transactions": []}  # 1700000000
+        return None
+
+    monkeypatch.setattr(deployer_cache, "_rpc_call", fake_rpc)
+
+    # Anchor the search at a known block so it does not walk from the head.
     info = asyncio.run(
-        deployer_cache.get_contract_creation_info("testchain", "0xCONTRACT", _CUSTOM_CHAINS)
+        deployer_cache.get_contract_creation_info(
+            "testchain", "0xCONTRACT", _RPC_CHAINS, known_block=200)
     )
-    assert info["creator"] == ""
-    assert info["deploy_ts"] is None
+    assert info["deploy_block"] == 100
+    assert info["deploy_ts"] == 1700000000
 
 
 def test_get_contract_creator_returns_bare_string(monkeypatch):
-    # Backward-compatible wrapper: still returns just the lowercased creator.
-    payload = {
-        "status": "1",
-        "result": [{"contractCreator": "0xDEPLOYERabc", "txHash": "0xT", "blockNumber": "1", "timestamp": "2"}],
-    }
-    monkeypatch.setattr(
-        deployer_cache.requests, "get", lambda *a, **k: _FakeResponse(payload)
-    )
+    async def fake(chain, contract, *a, **k):
+        return {"creator": "0xdeployerabc", "tx_hash": "0xt",
+                "deploy_block": 1, "deploy_ts": 2}
+
+    monkeypatch.setattr(deployer_cache, "get_contract_creation_info", fake)
     creator = asyncio.run(
-        deployer_cache.get_contract_creator("testchain", "0xCONTRACT", _CUSTOM_CHAINS)
+        deployer_cache.get_contract_creator("testchain", "0xCONTRACT")
     )
     assert creator == "0xdeployerabc"
