@@ -570,6 +570,47 @@ def get_opensea_url(contract: str, chain: str = "ethereum") -> str:
     return f"https://opensea.io/assets/{chain}/{contract}/1"
 
 
+async def get_opensea_safelist_status(chain: str, contract: str) -> str:
+    """
+    Fetch the OpenSea safelist_status for a contract.
+
+    Returns one of: "verified", "unverified", "unregistered", or "" on failure.
+    """
+    try:
+        from private.config_live import OPENSEA_API_KEY
+    except ImportError:
+        from config import OPENSEA_API_KEY
+
+    if not OPENSEA_API_KEY:
+        return ""
+
+    # Step 1: get collection slug from contract
+    config = EVM_CHAINS.get(chain, {})
+    os_chain = config.get("opensea_chain", chain)
+    url = f"https://api.opensea.io/api/v2/chain/{os_chain}/contract/{contract}"
+    headers = {"x-api-key": OPENSEA_API_KEY, "Accept": "application/json"}
+
+    try:
+        import requests
+        res = await asyncio.to_thread(requests.get, url, headers=headers, timeout=8)
+        if res.status_code != 200:
+            return ""
+        data = res.json()
+        slug = data.get("collection", "")
+        if not slug:
+            return ""
+
+        # Step 2: fetch collection details with safelist_status
+        url2 = f"https://api.opensea.io/api/v2/collections/{slug}"
+        res2 = await asyncio.to_thread(requests.get, url2, headers=headers, timeout=8)
+        if res2.status_code != 200:
+            return ""
+        col = res2.json()
+        return col.get("safelist_status", "")
+    except Exception:
+        return ""
+
+
 async def get_recent_transfers(chain: str, from_block: int, to_block: int):
     """
     Standard eth_getLogs for all chains detecting both ERC-721 and ERC-1155 mint events.
@@ -1078,7 +1119,15 @@ async def evaluate_contract_drop(chain: str, contract: str, txs: list, semaphore
         image_url = metadata.get("image_url")
         verified_source = await get_verified_contract_source(chain, contract)
         dex_info = await get_dex_liquidity(chain, contract)
+        opensea_safelist = await get_opensea_safelist_status(chain, contract)
         deployer_stats = get_deployer_stats(deployer_addr)
+
+        # ── OpenSea Safelist Filter (fast reject before Gemini spend) ─────
+        if opensea_safelist and opensea_safelist != "verified":
+            # unverified, unregistered, or suspicious collections get a hard
+            # skip — saves thousands of Gemini calls/day on low-quality drops
+            print(f"[Drops] 🚫 OpenSea safelist: {opensea_safelist} for {name or short_contract}")
+            return
 
         # ── Gemini AI Audit ───────────────────────────────────────────
         mint_velocity = round(mint_count / max(age_hours, 0.1), 1)
@@ -1099,6 +1148,7 @@ async def evaluate_contract_drop(chain: str, contract: str, txs: list, semaphore
             "deployer_stats":           deployer_stats,
             "ethos_profile":            ethos_profile,
             "dex_liquidity":            dex_info,
+            "opensea_safelist":         opensea_safelist,
         })
 
         # Record deployer outcome
