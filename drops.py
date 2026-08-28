@@ -1234,16 +1234,20 @@ async def check_drops():
 
             from_block = last_checked + 1
             # Clamp the span so a long downtime doesn't produce an oversized
-            # getLogs range that public RPCs reject. Skipping the excess is
-            # preferable to a failed scan that never advances the watermark.
+            # getLogs range that public RPCs reject. We do NOT skip the backlog:
+            # scanning only up to max_span blocks ahead and committing that
+            # watermark lets a far-behind chain (e.g. robinhood after a long
+            # outage) catch up over several cycles without losing history.
             max_span = max(step * 5, 2000)
             if current_block - from_block > max_span:
-                skipped = (current_block - max_span) - from_block
-                print(f"[Drops] ⚠️ {chain}: downtime gap too large, skipping "
-                      f"{skipped} block(s) to keep getLogs within RPC limits")
-                from_block = current_block - max_span
+                to_block = from_block + max_span - 1
+                print(f"[Drops] ⚠️ {chain}: catching up, scanning blocks "
+                      f"{from_block}→{to_block} ({max_span} blocks); "
+                      f"{current_block - to_block} block(s) remain for later cycles")
+            else:
+                to_block = current_block
 
-            transfers = await get_recent_transfers(chain, from_block, current_block)
+            transfers = await get_recent_transfers(chain, from_block, to_block)
 
             if transfers is None:
                 # RPC failure — do NOT advance the watermark; retry this range
@@ -1253,9 +1257,9 @@ async def check_drops():
 
             if not transfers:
                 # Empty range still counts as fully processed.
-                last_checked_blocks[chain] = current_block
-                checkpoint.set_block(chain, current_block)
-                print(f"[Drops] {chain}: 0 mint events in blocks {from_block}→{current_block} ({current_block - from_block + 1} blocks)")
+                last_checked_blocks[chain] = to_block
+                checkpoint.set_block(chain, to_block)
+                print(f"[Drops] {chain}: 0 mint events in blocks {from_block}→{to_block} ({to_block - from_block + 1} blocks)")
                 continue
 
             contracts = {}
@@ -1282,8 +1286,8 @@ async def check_drops():
             # dispatched. Advancing earlier means a crash mid-evaluation loses
             # those drops for good; advancing here means a crash re-scans the
             # range and the persisted dedup set suppresses the duplicates.
-            last_checked_blocks[chain] = current_block
-            checkpoint.set_block(chain, current_block)
+            last_checked_blocks[chain] = to_block
+            checkpoint.set_block(chain, to_block)
 
         except Exception as e:
             print(f"[Drops Error] {chain}: {e}")
