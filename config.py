@@ -23,12 +23,22 @@ GEMINI_DAILY_LIMIT = int(os.environ.get("GEMINI_DAILY_LIMIT", 500))
 # Gemini AI filter — skip contracts scoring below this (0 = off, 100 = all blocked)
 GEMINI_MIN_SCORE = int(os.environ.get("GEMINI_MIN_SCORE", 40))
 
+# If true, when all Gemini keys reach their daily quota, alerts for contracts that
+# pass on-chain quality gates will still be sent (with a quota badge) rather than silenced.
+GEMINI_ALLOW_ON_QUOTA = os.environ.get(
+    "GEMINI_ALLOW_ON_QUOTA", "false").strip().lower() in ("true", "1", "yes", "on")
+
 # Bitcoin Ordinals scanner. Disabled by default: the recent-inscriptions feed is
 # dominated by BRC-20 token operations and other non-art text, which are not NFTs
 # and burned the Gemini quota. Opt in with BTC_ORDINALS_ENABLED=true once the
 # scanner does meaningful per-inscription filtering.
 BTC_ORDINALS_ENABLED = os.environ.get(
     "BTC_ORDINALS_ENABLED", "false").strip().lower() in ("true", "1", "yes", "on")
+
+# Optional non-trading guidance. Disabled by default so alert-only channels do
+# not receive a message that could be mistaken for scanner activity.
+COMMUNITY_PULSE_ENABLED = os.environ.get(
+    "COMMUNITY_PULSE_ENABLED", "true").strip().lower() in ("true", "1", "yes", "on")
 
 # Collections to watch — add as many as you like
 COLLECTIONS = [
@@ -39,6 +49,8 @@ COLLECTIONS = [
     #     "contract": "0x...",              # Contract address
     #     "floor_alert_low": 0.0,           # Alert if floor drops BELOW this (ETH)
     #     "floor_alert_high": 0.0,          # Alert if floor rises ABOVE this (ETH)
+    #     "floor_drop_alert_enabled": True, # Set False to suppress only low-floor messages
+    #     "silent_floor_drop_alert": False, # Low-floor alert without sound/vibration
     # },
 ]
 
@@ -56,9 +68,14 @@ FLOOR_COOLDOWN_MINUTES = int(os.environ.get("FLOOR_COOLDOWN_MINUTES", 30))
 # can't provide a deployment timestamp. Tunable via env.
 MAX_CONTRACT_AGE_HOURS = int(os.environ.get("MAX_CONTRACT_AGE_HOURS", 48))
 
-# Maximum blocks to catch up when resuming after downtime.
-# Stale history beyond this horizon is skipped so the bot returns to live scanning quickly.
+# Maximum blocks to catch up when resuming after downtime. If a chain is behind
+# by more than this (e.g. after being stopped for hours/days), the bot skips
+# the stale backlog and jumps to (current_block - MAX_CATCHUP_BLOCKS) so you get
+# real-time alerts immediately instead of spending hours/days reading ancient blocks.
+# Set to 0 to jump directly to the live chain tip on every startup.
 MAX_CATCHUP_BLOCKS = int(os.environ.get("MAX_CATCHUP_BLOCKS", 2000))
 
-# Maximum Solana signature pages to search when recovering a saved watermark.
+# Solana signature pagination limit when resuming. If the saved signature
+# cannot be reached within this many pages of history, the backlog is treated
+# as stale and the bot jumps to the newest available signature.
 MAX_SOLANA_SIGNATURE_PAGES = int(os.environ.get("MAX_SOLANA_SIGNATURE_PAGES", 3))
