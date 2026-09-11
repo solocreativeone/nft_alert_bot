@@ -1295,8 +1295,10 @@ async def check_drops():
                 last_checked = max(0, from_block - 1)
                 last_checked_blocks[chain] = last_checked
                 checkpoint.set_block(chain, last_checked, flush_now=True)
-            else:
+           else:
                 from_block = last_checked + 1
+
+            to_block = min(from_block + step - 1, current_block)
 
             transfers = await get_recent_transfers(chain, from_block, to_block)
 
