@@ -48,6 +48,8 @@ MINT_COOLDOWN_MINUTES = 10
 MIN_MINTS_THRESHOLD = 5
 FLOOR_COOLDOWN_MINUTES = 30
 MAX_CONTRACT_AGE_HOURS = 48   # Skip drops whose contract was deployed longer ago than this
+MAX_CATCHUP_BLOCKS = 2000     # Max historical blocks to scan on resume (prevents days of catchup)
+MAX_SOLANA_SIGNATURE_PAGES = 3 # Max pages to search back for saved Solana signature before jumping to tip
 
 # Gemini AI filter. Every name imported from this file must exist, because one
 # missing name aborts the whole `from private.config_live import ...` statement

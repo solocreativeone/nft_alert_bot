@@ -22,9 +22,9 @@ import checkpoint
 from metadata_resolver import resolve_metadata_async
 
 try:
-    from private.config_live import GEMINI_MIN_SCORE
+    from private.config_live import GEMINI_MIN_SCORE, MAX_SOLANA_SIGNATURE_PAGES
 except ImportError:
-    from config import GEMINI_MIN_SCORE
+    from config import GEMINI_MIN_SCORE, MAX_SOLANA_SIGNATURE_PAGES
 
 # Public Solana RPC endpoints with automatic failover
 SOLANA_RPCS = [
@@ -86,21 +86,70 @@ def solana_rpc_post(payload: dict):
     return None
 
 
-async def get_recent_signatures(program_id: str, limit: int = 10):
-    """Fetch recent confirmed transaction signatures for a program."""
+async def get_recent_signatures(program_id: str, limit: int = 10,
+                                before: str | None = None):
+    """Fetch one newest-to-oldest page of confirmed program transactions.
+
+    ``None`` means the RPC call failed; an empty list is a successful page with
+    no more history. Keeping those states distinct prevents an outage from
+    advancing a signature watermark past unseen transactions.
+    """
+    options = {"limit": limit}
+    if before:
+        options["before"] = before
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "getSignaturesForAddress",
-        "params": [
-            program_id,
-            {"limit": limit}
-        ]
+        "params": [program_id, options],
     }
     data = await asyncio.to_thread(solana_rpc_post, payload)
-    if not data or "result" not in data:
-        return []
+    if not data or "result" not in data or not isinstance(data["result"], list):
+        return None
     return data["result"]
+
+
+async def get_signatures_since(program_id: str, last_signature: str,
+                               page_size: int = 1_000,
+                               max_pages: int = MAX_SOLANA_SIGNATURE_PAGES):
+    """Page backwards until ``last_signature`` is reached or ``max_pages`` is exhausted.
+
+    Returns ``(newest, signatures, complete)``.
+    - If ``last_signature`` was reached: returns ``(newest, signatures, True)``.
+    - If an RPC failure occurred: returns ``(newest, signatures, False)``.
+    - If ``last_signature`` was not found within ``max_pages`` or available history:
+      returns ``(newest, [], "stale")``.
+    """
+    newest = ""
+    signatures = []
+    before = None
+    pages_fetched = 0
+
+    while pages_fetched < max_pages:
+        page = await get_recent_signatures(program_id, limit=page_size, before=before)
+        if page is None:
+            return newest, signatures, False
+        if not page:
+            return newest, [], "stale"
+        if not newest:
+            newest = page[0].get("signature", "")
+        pages_fetched += 1
+
+        for sig_info in page:
+            signature = sig_info.get("signature")
+            if signature == last_signature:
+                return newest, signatures, True
+            if signature:
+                signatures.append(sig_info)
+
+        oldest = page[-1].get("signature")
+        if not oldest or oldest == before:
+            return newest, [], "stale"
+        before = oldest
+        if len(page) < page_size:
+            return newest, [], "stale"
+
+    return newest, [], "stale"
 
 
 async def get_parsed_transaction(signature: str):
@@ -196,21 +245,40 @@ async def check_solana_drops():
 
     for program_name, program_id in PROGRAMS_TO_WATCH:
         try:
-            sigs = await get_recent_signatures(program_id, limit=8)
-            if not sigs:
-                continue
-
             last_sig = last_signatures.get(program_id)
-            newest_sig = sigs[0].get("signature")
 
-            # First run for this program: seed the watermark and skip the batch so
-            # we don't alert on history. Persisted, so this only happens once ever
-            # rather than on every restart.
+            # First run seeds a position without alerting historical activity.
             if last_sig is None:
+                latest = await get_recent_signatures(program_id, limit=1)
+                if latest is None:
+                    print(f"[Solana] ⚠️ {program_name}: signature RPC failed; retaining cold-start state")
+                    continue
+                if not latest:
+                    continue
+                newest_sig = latest[0].get("signature")
+                if not newest_sig:
+                    continue
                 last_signatures[program_id] = newest_sig
                 checkpoint.set_signature(program_id, newest_sig, flush_now=True)
                 continue
 
+            newest_sig, sigs, complete = await get_signatures_since(program_id, last_sig)
+            if complete == "stale":
+                print("[Solana] ⚠️ Saved signature is outside the available RPC history.\n"
+                      "Treating backlog as stale and resuming from newest available signature.")
+                if not newest_sig:
+                    latest = await get_recent_signatures(program_id, limit=1)
+                    if latest:
+                        newest_sig = latest[0].get("signature")
+                if newest_sig:
+                    last_signatures[program_id] = newest_sig
+                    checkpoint.set_signature(program_id, newest_sig, flush_now=True)
+                continue
+            if not complete:
+                print(f"[Solana] ⚠️ {program_name}: could not page back to saved signature; watermark unchanged")
+                continue
+            if not sigs:
+                continue
             for sig_info in sigs:
                 sig = sig_info.get("signature")
                 if sig == last_sig:

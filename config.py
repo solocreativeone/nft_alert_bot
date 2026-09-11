@@ -55,3 +55,10 @@ FLOOR_COOLDOWN_MINUTES = int(os.environ.get("FLOOR_COOLDOWN_MINUTES", 30))
 # skipped as "not a new drop". Falls back to mint-window age when the explorer
 # can't provide a deployment timestamp. Tunable via env.
 MAX_CONTRACT_AGE_HOURS = int(os.environ.get("MAX_CONTRACT_AGE_HOURS", 48))
+
+# Maximum blocks to catch up when resuming after downtime.
+# Stale history beyond this horizon is skipped so the bot returns to live scanning quickly.
+MAX_CATCHUP_BLOCKS = int(os.environ.get("MAX_CATCHUP_BLOCKS", 2000))
+
+# Maximum Solana signature pages to search when recovering a saved watermark.
+MAX_SOLANA_SIGNATURE_PAGES = int(os.environ.get("MAX_SOLANA_SIGNATURE_PAGES", 3))

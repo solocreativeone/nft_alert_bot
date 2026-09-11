@@ -16,11 +16,11 @@ from metadata_resolver import resolve_metadata_async
 import checkpoint
 
 try:
-    from private.config_live import MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE, MAX_CONTRACT_AGE_HOURS
+    from private.config_live import MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE, MAX_CONTRACT_AGE_HOURS, MAX_CATCHUP_BLOCKS
     print("[Drops] ✅ Private config loaded")
 except ImportError as e:
     print(f"[Drops] ❌ ImportError: {e}")
-    from config import MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE, MAX_CONTRACT_AGE_HOURS
+    from config import MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE, MAX_CONTRACT_AGE_HOURS, MAX_CATCHUP_BLOCKS
 
 # Track contracts we've already alerted on with bounded cache. The in-memory pair
 # is a fast path; checkpoint.py holds the durable copy that survives restarts.
@@ -1282,20 +1282,21 @@ async def check_drops():
             if current_block <= last_checked:
                 continue
 
-            from_block = last_checked + 1
-            # Clamp the span so a long downtime doesn't produce an oversized
-            # getLogs range that public RPCs reject. We do NOT skip the backlog:
-            # scanning only up to max_span blocks ahead and committing that
-            # watermark lets a far-behind chain (e.g. robinhood after a long
-            # outage) catch up over several cycles without losing history.
-            max_span = max(step * 5, 2000)
-            if current_block - from_block > max_span:
-                to_block = from_block + max_span - 1
-                print(f"[Drops] ⚠️ {chain}: catching up, scanning blocks "
-                      f"{from_block}→{to_block} ({max_span} blocks); "
-                      f"{current_block - to_block} block(s) remain for later cycles")
+            backlog = current_block - last_checked
+            if MAX_CATCHUP_BLOCKS is not None and backlog > MAX_CATCHUP_BLOCKS:
+                if MAX_CATCHUP_BLOCKS <= 0:
+                    from_block = current_block
+                else:
+                    from_block = max(0, current_block - MAX_CATCHUP_BLOCKS)
+                print(f"[Drops] ⏩ {chain}: backlog of {backlog:,} blocks exceeds freshness "
+                      f"horizon ({MAX_CATCHUP_BLOCKS:,}); skipping stale history and starting at block {from_block:,}")
+                # Jump the watermark forward to before from_block so restarts and crashes
+                # resume from the fresh horizon instead of recreating the stale backlog.
+                last_checked = max(0, from_block - 1)
+                last_checked_blocks[chain] = last_checked
+                checkpoint.set_block(chain, last_checked, flush_now=True)
             else:
-                to_block = current_block
+                from_block = last_checked + 1
 
             transfers = await get_recent_transfers(chain, from_block, to_block)
 
