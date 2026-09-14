@@ -21,17 +21,22 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "🤖 NFTpulse is live!\n\n"
-        "I track floor prices, mints, new drops, and upcoming launches across multiple chains — "
-        "and send alerts straight here.\n\n"
-        "Quick commands:\n"
-        "/watch 0xContract [chain] — add a collection (default: ethereum)\n"
-        "  e.g. /watch 0xABC... polygon\n"
-        "/unwatch 0xContract — remove a collection\n"
-        "/list — show watchlist\n"
-        "/live [chain] — check upcoming mints for a chain (default: ethereum)\n"
-        "  e.g. /live polygon\n"
-        "/help — show all commands\n\n"
-        "Supported chains: ethereum, polygon, base, arbitrum, optimism, solana"
+        "Track floor prices, mints, new drops, and upcoming launches across multiple chains. "
+        "Get real-time alerts straight here.\n\n"
+
+        "📋 Quick commands\n"
+        "/watch 0xContract [chain] : Add a collection\n"
+        "  Default chain: ethereum\n"
+        "  Example: /watch 0xABC... polygon\n\n"
+        "/unwatch 0xContract : Remove a collection\n"
+        "/list : Show your watchlist\n"
+        "/live [chain] : Check upcoming mints\n"
+        "  Default chain: ethereum\n"
+        "  Example: /live polygon\n"
+        "/help : Show all commands\n\n"
+
+        "🌐 Supported chains\n"
+        "ethereum, polygon, base, arbitrum, optimism, solana"
     )
 
 async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
