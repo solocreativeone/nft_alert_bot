@@ -1,5 +1,6 @@
 import asyncio
 import re
+from datetime import datetime, timezone
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from watchlist import add_to_watchlist, remove_from_watchlist, get_watchlist
@@ -167,6 +168,16 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     lines.append(f"\n<b>Processed mints remembered:</b> {processed}")
 
+    health = checkpoint.all_health()
+    if health:
+        lines.append("\n<b>Scanner health:</b>")
+        for scanner, entry in sorted(health.items()):
+            mark = "🟢" if entry.get("ok") else "🔴"
+            at = entry.get("at", 0)
+            when = datetime.fromtimestamp(at, timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if at else "never"
+            detail = entry.get("detail", "")
+            lines.append(f"  {mark} {scanner}: {when}" + (f" — {detail}" if detail else ""))
+
     status = pool_status()
     lines.append(
         f"\n<b>Gemini keys:</b> {status['available_keys']}/{status['total_keys']} available"
@@ -189,13 +200,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "🤖 NFTpulse Bot Commands\n\n"
-        "/start — welcome message\n"
-        "/watch 0xContract — add a collection to watchlist\n"
-        "/unwatch 0xContract — remove a collection\n"
-        "/list — show all watched collections\n"
-        "/live — check live & upcoming mints now\n"
-        "/status — scan position and Gemini key quota\n"
-        "/help — show this message"
+        "/start - welcome message\n"
+        "/watch 0xContract - add a collection to watchlist\n"
+        "/unwatch 0xContract - remove a collection\n"
+        "/list - show all watched collections\n"
+        "/live - check live & upcoming mints now\n"
+        "/help - show this message"
     )
 
 # App Builder 
