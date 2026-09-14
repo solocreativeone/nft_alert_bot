@@ -28,6 +28,10 @@ PULSES = (
     "Research before reaction.",
     "Trust signals should be verified, not assumed.",
     "Every trade needs a reason and an exit plan.",
+    "Check contract permissions before connecting your wallet.",
+    "Unknown approvals can create unnecessary risk.",
+    "A verified contract is safer to inspect, not automatically safe to use.",
+    "Never let FOMO replace wallet security.",
 )
 
 
