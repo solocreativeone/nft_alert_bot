@@ -1203,7 +1203,7 @@ async def evaluate_contract_drop(chain: str, contract: str, txs: list, semaphore
 
         # Add Watch button
         button_rows.append([
-            InlineKeyboardButton(text="👀 /watch", callback_data=f"watch:{chain}:{contract.lower()}")
+            InlineKeyboardButton(text="👀 Watch", callback_data=f"watch:{chain}:{contract.lower()}")
         ])
 
         reply_markup = InlineKeyboardMarkup(button_rows)
