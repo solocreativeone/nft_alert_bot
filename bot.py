@@ -5,6 +5,7 @@ from mint import check_mints
 from drops import check_drops, wire_healthy_rpcs
 from solana_drops import check_solana_drops
 from btc_ordinals import check_btc_ordinals, BTC_ORDINALS_ENABLED
+from community_pulse import send_daily_community_pulse
 from commands import build_app
 import checkpoint
 
@@ -16,20 +17,22 @@ except ImportError:
     from config import FLOOR_CHECK_INTERVAL, MINT_CHECK_INTERVAL, DROPS_CHECK_INTERVAL, TELEGRAM_TOKEN
     print("[Config] 📄 Public config loaded")
 
-SOLANA_DROPS_CHECK_INTERVAL = 2 # every 2 minutes
-BTC_CHECK_INTERVAL = 5          # every 5 minutes
+SOLANA_DROPS_CHECK_INTERVAL = 2  # every 2 minutes
+BTC_CHECK_INTERVAL = 5            # every 5 minutes
 
 print("🤖 NFT Alert Bot starting...")
-print(f"   Floor checks:      every {FLOOR_CHECK_INTERVAL} minutes")
-print(f"   Mint checks:       every {MINT_CHECK_INTERVAL} minute(s)")
-print(f"   EVM Drop checks:   every {DROPS_CHECK_INTERVAL} minutes")
-print(f"   Solana Drop checks:every {SOLANA_DROPS_CHECK_INTERVAL} minutes")
+print(f"   Floor checks:       every {FLOOR_CHECK_INTERVAL} minutes")
+print(f"   Mint checks:        every {MINT_CHECK_INTERVAL} minute(s)")
+print(f"   EVM Drop checks:    every {DROPS_CHECK_INTERVAL} minutes")
+print(f"   Solana Drop checks: every {SOLANA_DROPS_CHECK_INTERVAL} minutes")
 if BTC_ORDINALS_ENABLED:
-    print(f"   Bitcoin Ordinals:  every {BTC_CHECK_INTERVAL} minutes")
+    print(f"   Bitcoin Ordinals:   every {BTC_CHECK_INTERVAL} minutes")
 else:
-    print(f"   Bitcoin Ordinals:  DISABLED (set BTC_ORDINALS_ENABLED=true to enable)")
-print(f"   Commands:          /watch  /unwatch  /list  /status  /help")
+    print(f"   Bitcoin Ordinals:   DISABLED (set BTC_ORDINALS_ENABLED=true to enable)")
+print("   Community pulse:    once per UTC day")
+print(f"   Commands:           /watch  /unwatch  /list  /status  /help")
 print("─" * 40)
+
 
 async def loop_task(interval_minutes, task_func):
     """Run an async task in a continuous loop with a sleep interval."""
@@ -45,6 +48,7 @@ async def loop_task(interval_minutes, task_func):
             await task_func()
         except Exception as e:
             print(f"[Loop Error] Failed in {task_func.__name__}: {e}")
+
 
 async def main():
     # Load persistent scan state before any scanner runs so every watermark and
@@ -63,6 +67,8 @@ async def main():
     asyncio.create_task(loop_task(MINT_CHECK_INTERVAL, check_mints))
     asyncio.create_task(loop_task(DROPS_CHECK_INTERVAL, check_drops))
     asyncio.create_task(loop_task(SOLANA_DROPS_CHECK_INTERVAL, check_solana_drops))
+    asyncio.create_task(loop_task(24 * 60, send_daily_community_pulse))
+
     if BTC_ORDINALS_ENABLED:
         asyncio.create_task(loop_task(BTC_CHECK_INTERVAL, check_btc_ordinals))
 
@@ -70,12 +76,13 @@ async def main():
     await app.initialize()
     await app.updater.start_polling(allowed_updates=["message", "callback_query"])
     await app.start()
-    
+
     print("[Commands] ✅ Telegram command listener started")
     print("[Commands]    /start  /watch  /unwatch  /list  /live  /status  /help")
-    
+
     # Wait indefinitely
     await asyncio.Event().wait()
+
 
 if __name__ == "__main__":
     try:
