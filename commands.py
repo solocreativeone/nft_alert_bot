@@ -1,6 +1,5 @@
 import asyncio
 import re
-from datetime import datetime, timezone
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from watchlist import add_to_watchlist, remove_from_watchlist, get_watchlist
@@ -13,7 +12,8 @@ except ImportError:
 # Valid Ethereum address pattern
 ETH_ADDRESS_PATTERN = re.compile(r'^0x[a-fA-F0-9]{40}$')
 
-# Command Handlers 
+
+# Command Handlers
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_chat.id) != str(CHAT_ID).strip():
@@ -33,11 +33,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/live [chain] : Check upcoming mints\n"
         "  Default chain: ethereum\n"
         "  Example: /live polygon\n"
+        "/status : Show bot status\n"
         "/help : Show all commands\n\n"
 
         "🌐 Supported chains\n"
         "ethereum, polygon, base, arbitrum, optimism, solana"
     )
+
 
 async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_chat.id) != str(CHAT_ID).strip():
@@ -46,18 +48,29 @@ async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from live_drops import get_live_drops_summary, NFTCALENDAR_CHAINS
 
     chain = context.args[0].strip().lower() if context.args else "ethereum"
+
     if chain not in NFTCALENDAR_CHAINS:
         supported = ", ".join(NFTCALENDAR_CHAINS.keys())
-        await update.message.reply_text(f"❌ Unsupported chain. Supported: {supported}")
+        await update.message.reply_text(
+            f"❌ Unsupported chain. Supported: {supported}"
+        )
         return
 
-    await update.message.reply_text(f"🔍 Fetching upcoming {chain.capitalize()} drops from NFTCalendar...")
+    await update.message.reply_text(
+        f"🔍 Fetching upcoming {chain.capitalize()} drops from NFTCalendar..."
+    )
 
     try:
-        summary = await asyncio.to_thread(get_live_drops_summary, chain)
+        summary = await asyncio.to_thread(
+            get_live_drops_summary,
+            chain
+        )
         await update.message.reply_text(summary)
     except Exception as e:
-        await update.message.reply_text(f"❌ Error checking live mints: {e}")
+        await update.message.reply_text(
+            f"❌ Error checking live mints: {e}"
+        )
+
 
 async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_chat.id) != str(CHAT_ID).strip():
@@ -72,14 +85,30 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     contract = context.args[0].strip()
-    chain = context.args[1].strip().lower() if len(context.args) > 1 else "ethereum"
+    chain = (
+        context.args[1].strip().lower()
+        if len(context.args) > 1
+        else "ethereum"
+    )
 
-    supported_chains = ["ethereum", "polygon", "base", "arbitrum", "optimism", "robinhood"]
+    supported_chains = [
+        "ethereum",
+        "polygon",
+        "base",
+        "arbitrum",
+        "optimism",
+        "robinhood",
+    ]
+
     if chain not in supported_chains:
-         await update.message.reply_text(f"❌ Unsupported chain. Supported chains: {', '.join(supported_chains)}")
-         return
+        await update.message.reply_text(
+            f"❌ Unsupported chain. Supported chains: "
+            f"{', '.join(supported_chains)}"
+        )
+        return
 
-    # Ethereum addresses apply to EVM chains — must be 0x + 40 hex chars
+    # Ethereum addresses apply to EVM chains
+    # Must be 0x + 40 hexadecimal characters
     if not ETH_ADDRESS_PATTERN.match(contract):
         await update.message.reply_text(
             "❌ Invalid contract address.\n"
@@ -88,17 +117,25 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    await update.message.reply_text(f"🔍 Looking up {contract[:10]}... on {chain} via OpenSea...")
+    await update.message.reply_text(
+        f"🔍 Looking up {contract[:10]}... on {chain} via OpenSea..."
+    )
 
-    success, result = await asyncio.to_thread(add_to_watchlist, contract, chain)
+    success, result = await asyncio.to_thread(
+        add_to_watchlist,
+        contract,
+        chain
+    )
 
     if not success:
         await update.message.reply_text(f"❌ {result}")
         return
 
     col = result
+
     await update.message.reply_text(
-        f"✅ Now watching: {col['name']} [{col['chain'].capitalize()}]\n"
+        f"✅ Now watching: {col['name']} "
+        f"[{col['chain'].capitalize()}]\n"
         f"Contract: {col['contract'][:10]}...\n"
         f"Current floor: {col['current_floor']} ETH\n"
         f"🚨 Alert low: {col['floor_alert_low']} ETH\n"
@@ -106,45 +143,72 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔗 https://opensea.io/collection/{col['slug']}"
     )
 
+
 async def unwatch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_chat.id) != str(CHAT_ID).strip():
         return
 
     if not context.args:
-        await update.message.reply_text("Usage: /unwatch 0xContractAddress")
+        await update.message.reply_text(
+            "Usage: /unwatch 0xContractAddress"
+        )
         return
 
     contract = context.args[0].strip()
 
     if not ETH_ADDRESS_PATTERN.match(contract):
-        await update.message.reply_text("❌ Invalid contract address.")
+        await update.message.reply_text(
+            "❌ Invalid contract address."
+        )
         return
 
-    success, msg = await asyncio.to_thread(remove_from_watchlist, contract)
+    success, msg = await asyncio.to_thread(
+        remove_from_watchlist,
+        contract
+    )
 
     if success:
-        await update.message.reply_text(f"✅ Removed {contract[:10]}... from watchlist.")
+        await update.message.reply_text(
+            f"✅ Removed {contract[:10]}... from watchlist."
+        )
     else:
         await update.message.reply_text(f"❌ {msg}")
+
 
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_chat.id) != str(CHAT_ID).strip():
         return
 
     watchlist = get_watchlist()
+
     if not watchlist:
-        await update.message.reply_text("📂 Watchlist is empty.")
+        await update.message.reply_text(
+            "📂 Watchlist is empty."
+        )
         return
 
     lines = ["📂 <b>Current Watchlist:</b>\n"]
+
     for idx, item in enumerate(watchlist, 1):
-        chain_name = item.get("chain", "ethereum").capitalize()
+        chain_name = item.get(
+            "chain",
+            "ethereum"
+        ).capitalize()
+
         lines.append(
-            f"{idx}. <a href='https://opensea.io/collection/{item['slug']}'>{item['name']}</a> [{chain_name}]\n"
+            f"{idx}. "
+            f"<a href='https://opensea.io/collection/{item['slug']}'>"
+            f"{item['name']}</a> "
+            f"[{chain_name}]\n"
             f"   Floor: {item.get('current_floor', 0)} ETH"
         )
 
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML", disable_web_page_preview=True)
+    await update.message.reply_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        disable_web_page_preview=True
+    )
+
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Report scan checkpoint position and Gemini key-pool quota usage.
@@ -160,43 +224,54 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines = ["📊 <b>Bot Status</b>\n"]
 
+    # Blockchain checkpoint positions
     blocks = checkpoint.all_blocks()
+
     if blocks:
         lines.append("<b>Last processed block:</b>")
+
         for chain in sorted(blocks):
-            lines.append(f"  {chain}: <code>{blocks[chain]}</code>")
+            lines.append(
+                f"  {chain}: <code>{blocks[chain]}</code>"
+            )
     else:
-        lines.append("<b>Last processed block:</b> none yet (cold start)")
+        lines.append(
+            "<b>Last processed block:</b> none yet (cold start)"
+        )
 
+    # Processed mint memory
     processed = sum(
-        checkpoint.seen_count(section) for section in checkpoint.SEEN_LIMITS
+        checkpoint.seen_count(section)
+        for section in checkpoint.SEEN_LIMITS
     )
-    lines.append(f"\n<b>Processed mints remembered:</b> {processed}")
 
-    health = checkpoint.all_health()
-    if health:
-        lines.append("\n<b>Scanner health:</b>")
-        for scanner, entry in sorted(health.items()):
-            mark = "🟢" if entry.get("ok") else "🔴"
-            at = entry.get("at", 0)
-            when = datetime.fromtimestamp(at, timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if at else "never"
-            detail = entry.get("detail", "")
-            lines.append(f"  {mark} {scanner}: {when}" + (f" — {detail}" if detail else ""))
-
-    status = pool_status()
     lines.append(
-        f"\n<b>Gemini keys:</b> {status['available_keys']}/{status['total_keys']} available"
+        f"\n<b>Processed mints remembered:</b> {processed}"
     )
+
+    # Gemini key pool
+    status = pool_status()
+
+    lines.append(
+        f"\n<b>Gemini keys:</b> "
+        f"{status['available_keys']}/{status['total_keys']} available"
+    )
+
     for row in status["keys"]:
         mark = "🟢" if row["available"] else "🔴"
         active = " (active)" if row["active"] else ""
         cooling = " cooling down" if row["cooling_down"] else ""
+
         lines.append(
-            f"  {mark} key #{row['index']}: {row['used_today']}/{row['limit']} "
+            f"  {mark} key #{row['index']}: "
+            f"{row['used_today']}/{row['limit']} "
             f"used today{active}{cooling}"
         )
 
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+    await update.message.reply_text(
+        "\n".join(lines),
+        parse_mode="HTML"
+    )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -210,38 +285,69 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/unwatch 0xContract - remove a collection\n"
         "/list - show all watched collections\n"
         "/live - check live & upcoming mints now\n"
+        "/status - show bot checkpoint and Gemini status\n"
         "/help - show this message"
     )
 
-# App Builder 
+
+# App Builder
 
 def build_app():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("watch", watch_command))
-    app.add_handler(CommandHandler("unwatch", unwatch_command))
-    app.add_handler(CommandHandler("list", list_command))
-    app.add_handler(CommandHandler("live", live_command))
-    app.add_handler(CommandHandler("status", status_command))
-    app.add_handler(CommandHandler("help", help_command))
+
+    app.add_handler(
+        CommandHandler("start", start_command)
+    )
+    app.add_handler(
+        CommandHandler("watch", watch_command)
+    )
+    app.add_handler(
+        CommandHandler("unwatch", unwatch_command)
+    )
+    app.add_handler(
+        CommandHandler("list", list_command)
+    )
+    app.add_handler(
+        CommandHandler("live", live_command)
+    )
+    app.add_handler(
+        CommandHandler("status", status_command)
+    )
+    app.add_handler(
+        CommandHandler("help", help_command)
+    )
+
     return app
 
+
 async def start_polling():
-    """Start polling without signal handlers — safe for background threads."""
+    """Start polling without signal handlers, safe for background threads."""
     app = build_app()
+
     await app.initialize()
-    await app.updater.start_polling(allowed_updates=["message"])
+    await app.updater.start_polling(
+        allowed_updates=["message"]
+    )
     await app.start()
+
     print("[Commands] ✅ Telegram command listener started")
-    print("[Commands]    /start  /watch  /unwatch  /list  /live  /status  /help")
+    print(
+        "[Commands]    "
+        "/start  /watch  /unwatch  /list  /live  /status  /help"
+    )
+
     await asyncio.Event().wait()
+
 
 def run_command_listener():
     """Run command listener in its own event loop inside a background thread."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+
     try:
-        loop.run_until_complete(start_polling())
+        loop.run_until_complete(
+            start_polling()
+        )
     except Exception as e:
         print(f"[Commands Error] {e}")
     finally:
