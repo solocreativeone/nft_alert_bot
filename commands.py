@@ -1,8 +1,14 @@
 import asyncio
 import re
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from watchlist import add_to_watchlist, remove_from_watchlist, get_watchlist
+from price_utils import (
+    shorten_address,
+    get_eth_usd_price,
+    format_floor_display,
+)
+from notifier import escape_html
 
 try:
     from private.config_live import TELEGRAM_TOKEN, CHAT_ID
@@ -117,7 +123,7 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        f"🔍 Looking up {contract[:10]}... on {chain} via OpenSea..."
+        f"🔍 Looking up {shorten_address(contract)} on {chain} via OpenSea..."
     )
 
     success, result = await asyncio.to_thread(
@@ -131,12 +137,28 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     col = result
+    short_addr = shorten_address(col["contract"])
+    eth_usd_price = get_eth_usd_price()
+    floor_val = col.get("current_floor")
+    is_free = bool(col.get("is_free_mint") or col.get("free_mint"))
+    floor_display = format_floor_display(
+        floor=floor_val,
+        eth_usd_price=eth_usd_price,
+        is_free_mint=is_free,
+        is_alert=False,
+    )
+    if floor_display == "🆓 Free Mint":
+        floor_line = "🆓 Free Mint\n"
+    elif floor_display:
+        floor_line = f"Current {floor_display[0].lower() + floor_display[1:]}\n"
+    else:
+        floor_line = ""
 
     await update.message.reply_text(
         f"✅ Now watching: {col['name']} "
         f"[{col['chain'].capitalize()}]\n"
-        f"Contract: {col['contract'][:10]}...\n"
-        f"Current floor: {col['current_floor']} ETH\n"
+        f"Contract: {short_addr}\n"
+        f"{floor_line}"
         f"🚨 Alert low: {col['floor_alert_low']} ETH\n"
         f"🚀 Alert high: {col['floor_alert_high']} ETH\n"
         f"🔗 https://opensea.io/collection/{col['slug']}"
@@ -166,12 +188,69 @@ async def unwatch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         contract
     )
 
+    short_addr = shorten_address(contract)
     if success:
         await update.message.reply_text(
-            f"✅ Removed {contract[:10]}... from watchlist."
+            f"✅ Removed {short_addr} from watchlist."
         )
     else:
         await update.message.reply_text(f"❌ {msg}")
+
+
+def render_watchlist_message(watchlist, eth_usd_price=None):
+    """Render watchlist text and inline keyboard markup with /unwatch actions."""
+    if not watchlist:
+        return "📂 Watchlist is empty.", None
+
+    if eth_usd_price is None:
+        eth_usd_price = get_eth_usd_price()
+
+    items_output = []
+    button_rows = []
+
+    for idx, item in enumerate(watchlist, 1):
+        chain_name = item.get(
+            "chain",
+            "ethereum"
+        ).capitalize()
+        contract = item.get("contract", "")
+        short_addr = shorten_address(contract)
+        slug = item.get("slug", "")
+
+        name_display = (
+            f"<a href='https://opensea.io/collection/{slug}'>{escape_html(item['name'])}</a>"
+            if slug
+            else escape_html(item.get("name", "Unknown"))
+        )
+
+        item_lines = [
+            f"{idx}. {name_display} [{chain_name}]",
+            f"   Contract: {short_addr}",
+        ]
+
+        floor_val = item.get("current_floor")
+        is_free_mint = bool(item.get("is_free_mint") or item.get("free_mint"))
+
+        floor_str = format_floor_display(
+            floor=floor_val,
+            eth_usd_price=eth_usd_price,
+            is_free_mint=is_free_mint,
+            is_alert=False,
+        )
+        if floor_str:
+            item_lines.append(f"   {floor_str}")
+
+        items_output.append("\n".join(item_lines))
+
+        btn_text = "/unwatch" if len(watchlist) == 1 else f"/unwatch {idx}. {item.get('name', '')[:20]}"
+        button_rows.append([
+            InlineKeyboardButton(text=btn_text, callback_data=f"unwatch:{contract.lower()}")
+        ])
+
+    body = "\n\n".join(items_output)
+    full_text = f"📂 <b>Current Watchlist:</b>\n\n{body}"
+    reply_markup = InlineKeyboardMarkup(button_rows) if button_rows else None
+    return full_text, reply_markup
 
 
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -179,34 +258,113 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     watchlist = get_watchlist()
-
-    if not watchlist:
-        await update.message.reply_text(
-            "📂 Watchlist is empty."
-        )
-        return
-
-    lines = ["📂 <b>Current Watchlist:</b>\n"]
-
-    for idx, item in enumerate(watchlist, 1):
-        chain_name = item.get(
-            "chain",
-            "ethereum"
-        ).capitalize()
-
-        lines.append(
-            f"{idx}. "
-            f"<a href='https://opensea.io/collection/{item['slug']}'>"
-            f"{item['name']}</a> "
-            f"[{chain_name}]\n"
-            f"   Floor: {item.get('current_floor', 0)} ETH"
-        )
+    text, reply_markup = render_watchlist_message(watchlist)
 
     await update.message.reply_text(
-        "\n".join(lines),
+        text,
         parse_mode="HTML",
-        disable_web_page_preview=True
+        disable_web_page_preview=True,
+        reply_markup=reply_markup,
     )
+
+
+async def watch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /watch callback button click from alert messages."""
+    query = update.callback_query
+    if not query:
+        return
+    if str(update.effective_chat.id) != str(CHAT_ID).strip():
+        return
+
+    await query.answer()
+
+    data = query.data or ""
+    parts = data.split(":")
+    if len(parts) < 3 or parts[0] != "watch":
+        return
+
+    chain = parts[1].strip().lower()
+    contract = parts[2].strip().lower()
+
+    if not ETH_ADDRESS_PATTERN.match(contract):
+        if query.message:
+            await query.message.reply_text("❌ Invalid contract address.")
+        return
+
+    success, result = await asyncio.to_thread(
+        add_to_watchlist,
+        contract,
+        chain
+    )
+
+    if not success:
+        if query.message:
+            await query.message.reply_text(f"❌ {result}")
+        return
+
+    col = result
+    short_addr = shorten_address(col.get("contract", contract))
+    eth_usd_price = get_eth_usd_price()
+    floor_val = col.get("current_floor")
+    is_free = bool(col.get("is_free_mint") or col.get("free_mint"))
+
+    floor_display = format_floor_display(
+        floor=floor_val,
+        eth_usd_price=eth_usd_price,
+        is_free_mint=is_free,
+        is_alert=False,
+    )
+    if floor_display == "🆓 Free Mint":
+        floor_line = "🆓 Free Mint\n"
+    elif floor_display:
+        floor_line = f"Current {floor_display[0].lower() + floor_display[1:]}\n"
+    else:
+        floor_line = ""
+
+    reply_text = (
+        f"✅ Now watching: {col['name']} "
+        f"[{col['chain'].capitalize()}]\n"
+        f"Contract: {short_addr}\n"
+        f"{floor_line}"
+        f"🚨 Alert low: {col['floor_alert_low']} ETH\n"
+        f"🚀 Alert high: {col['floor_alert_high']} ETH\n"
+        f"🔗 https://opensea.io/collection/{col['slug']}"
+    )
+    if query.message:
+        await query.message.reply_text(reply_text)
+
+
+async def unwatch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /unwatch callback button click from watchlist."""
+    query = update.callback_query
+    if not query:
+        return
+    if str(update.effective_chat.id) != str(CHAT_ID).strip():
+        return
+
+    await query.answer()
+
+    data = query.data or ""
+    parts = data.split(":", 1)
+    if len(parts) < 2 or parts[0] != "unwatch":
+        return
+
+    contract = parts[1].strip().lower()
+    success, msg = await asyncio.to_thread(
+        remove_from_watchlist,
+        contract
+    )
+
+    short_addr = shorten_address(contract)
+    if success:
+        if query.message:
+            await query.message.reply_text(
+                f"✅ Removed {short_addr} from watchlist."
+            )
+    else:
+        if query.message:
+            await query.message.reply_text(f"❌ {msg}")
+
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -314,6 +472,12 @@ def build_app():
     app.add_handler(
         CommandHandler("help", help_command)
     )
+    app.add_handler(
+        CallbackQueryHandler(watch_callback, pattern=r"^watch:")
+    )
+    app.add_handler(
+        CallbackQueryHandler(unwatch_callback, pattern=r"^unwatch:")
+    )
 
     return app
 
@@ -324,7 +488,7 @@ async def start_polling():
 
     await app.initialize()
     await app.updater.start_polling(
-        allowed_updates=["message"]
+        allowed_updates=["message", "callback_query"]
     )
     await app.start()
 

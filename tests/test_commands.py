@@ -86,3 +86,84 @@ def test_status_command_is_registered():
     import inspect
     src = inspect.getsource(commands.build_app)
     assert '"status"' in src and "status_command" in src
+
+# ── Watch / Unwatch / List commands ──────────────────────────────────────────
+
+def test_watch_command_requires_args(monkeypatch):
+    monkeypatch.setattr(commands, "CHAT_ID", "123")
+    update, msg = _fake_update("123")
+    ctx = types.SimpleNamespace(args=[])
+    asyncio.run(commands.watch_command(update, ctx))
+    assert "Usage: /watch" in msg.sent[0]
+
+def test_watch_command_invalid_address(monkeypatch):
+    monkeypatch.setattr(commands, "CHAT_ID", "123")
+    update, msg = _fake_update("123")
+    ctx = types.SimpleNamespace(args=["0xinvalid", "ethereum"])
+    asyncio.run(commands.watch_command(update, ctx))
+    assert "Invalid contract address" in msg.sent[0]
+
+def test_unwatch_command_requires_args(monkeypatch):
+    monkeypatch.setattr(commands, "CHAT_ID", "123")
+    update, msg = _fake_update("123")
+    ctx = types.SimpleNamespace(args=[])
+    asyncio.run(commands.unwatch_command(update, ctx))
+    assert "Usage: /unwatch" in msg.sent[0]
+
+def test_list_command_empty(monkeypatch):
+    monkeypatch.setattr(commands, "CHAT_ID", "123")
+    monkeypatch.setattr(commands, "get_watchlist", lambda: [])
+    update, msg = _fake_update("123")
+    asyncio.run(commands.list_command(update, None))
+    assert "Watchlist is empty" in msg.sent[0]
+
+def test_list_command_with_items(monkeypatch):
+    monkeypatch.setattr(commands, "CHAT_ID", "123")
+    monkeypatch.setattr(commands, "get_watchlist", lambda: [{
+        "name": "Test Col",
+        "slug": "test-col",
+        "chain": "ethereum",
+        "contract": "0x1234567890123456789012345678901234567890",
+        "current_floor": 0.5
+    }])
+    monkeypatch.setattr(commands, "get_eth_usd_price", lambda: 2000.0)
+    update, msg = _fake_update("123")
+    asyncio.run(commands.list_command(update, None))
+    assert "Test Col" in msg.sent[0]
+    assert "0x1234...7890" in msg.sent[0]
+    assert "Floor: 0.5" in msg.sent[0]
+
+class _FakeCallbackQuery:
+    def __init__(self, data):
+        self.data = data
+        self.message = _FakeMessage()
+        self.answered = False
+
+    async def answer(self):
+        self.answered = True
+
+def _fake_callback_update(chat_id, data):
+    query = _FakeCallbackQuery(data)
+    return types.SimpleNamespace(
+        effective_chat=types.SimpleNamespace(id=chat_id),
+        callback_query=query
+    ), query
+
+def test_watch_callback_invalid(monkeypatch):
+    monkeypatch.setattr(commands, "CHAT_ID", "123")
+    update, query = _fake_callback_update("123", "watch:ethereum:0xinvalid")
+    asyncio.run(commands.watch_callback(update, None))
+    assert query.answered
+    assert "Invalid contract address" in query.message.sent[0]
+
+def test_unwatch_callback_valid(monkeypatch):
+    monkeypatch.setattr(commands, "CHAT_ID", "123")
+    update, query = _fake_callback_update("123", "unwatch:0x1234567890123456789012345678901234567890")
+
+    async def mock_remove(*args):
+        return True, ""
+    monkeypatch.setattr("asyncio.to_thread", mock_remove)
+
+    asyncio.run(commands.unwatch_callback(update, None))
+    assert query.answered
+    assert "Removed 0x1234...7890" in query.message.sent[0]

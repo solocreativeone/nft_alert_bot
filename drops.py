@@ -13,6 +13,7 @@ from deployer_cache import get_contract_creator, get_contract_creation_info, is_
 from dex_liquidity import get_dex_liquidity
 from ethos import get_ethos_profile_async, format_telegram_ethos_badge
 from metadata_resolver import resolve_metadata_async
+from price_utils import get_eth_usd_price, format_floor_display, shorten_address
 import checkpoint
 
 try:
@@ -570,11 +571,11 @@ def get_opensea_url(contract: str, chain: str = "ethereum") -> str:
     return f"https://opensea.io/assets/{chain}/{contract}/1"
 
 
-async def get_opensea_safelist_status(chain: str, contract: str) -> str:
+async def get_opensea_safelist_status(chain: str, contract: str) -> tuple[str, float]:
     """
-    Fetch the OpenSea safelist_status for a contract.
+    Fetch the OpenSea safelist_status for a contract and the current floor price.
 
-    Returns one of: "verified", "unverified", "unregistered", or "" on failure.
+    Returns (safelist_status, floor_price).
     """
     try:
         from private.config_live import OPENSEA_API_KEY
@@ -582,7 +583,7 @@ async def get_opensea_safelist_status(chain: str, contract: str) -> str:
         from config import OPENSEA_API_KEY
 
     if not OPENSEA_API_KEY:
-        return ""
+        return "", 0.0
 
     # Step 1: get collection slug from contract
     config = EVM_CHAINS.get(chain, {})
@@ -594,21 +595,31 @@ async def get_opensea_safelist_status(chain: str, contract: str) -> str:
         import requests
         res = await asyncio.to_thread(requests.get, url, headers=headers, timeout=8)
         if res.status_code != 200:
-            return ""
+            return "", 0.0
         data = res.json()
         slug = data.get("collection", "")
         if not slug:
-            return ""
+            return "", 0.0
 
         # Step 2: fetch collection details with safelist_status
         url2 = f"https://api.opensea.io/api/v2/collections/{slug}"
         res2 = await asyncio.to_thread(requests.get, url2, headers=headers, timeout=8)
         if res2.status_code != 200:
-            return ""
+            return "", 0.0
         col = res2.json()
-        return col.get("safelist_status", "")
+        safelist = col.get("safelist_status", "")
+
+        # Step 3: fetch stats for floor price
+        url3 = f"https://api.opensea.io/api/v2/collections/{slug}/stats"
+        res3 = await asyncio.to_thread(requests.get, url3, headers=headers, timeout=8)
+        floor = 0.0
+        if res3.status_code == 200:
+            stats = res3.json()
+            floor = float(stats.get("total", {}).get("floor_price") or 0.0)
+
+        return safelist, floor
     except Exception:
-        return ""
+        return "", 0.0
 
 
 async def get_recent_transfers(chain: str, from_block: int, to_block: int):
@@ -1022,7 +1033,7 @@ async def evaluate_contract_drop(chain: str, contract: str, txs: list, semaphore
         if contract in alerted_contracts_set or checkpoint.was_seen(SEEN_EVM, contract):
             return
 
-        short_contract = f"{contract[:6]}...{contract[-4:]}"
+        short_contract = shorten_address(contract)
 
         # ── DeFi / Infrastructure Fast-Skip (address blocklist) ───────
         # Reject known LP / position / withdrawal-receipt contracts before
@@ -1119,7 +1130,7 @@ async def evaluate_contract_drop(chain: str, contract: str, txs: list, semaphore
         image_url = metadata.get("image_url")
         verified_source = await get_verified_contract_source(chain, contract)
         dex_info = await get_dex_liquidity(chain, contract)
-        opensea_safelist = await get_opensea_safelist_status(chain, contract)
+        opensea_safelist, floor_val = await get_opensea_safelist_status(chain, contract)
         deployer_stats = get_deployer_stats(deployer_addr)
 
         # ── OpenSea Safelist Filter (fast reject before Gemini spend) ─────
@@ -1190,14 +1201,25 @@ async def evaluate_contract_drop(chain: str, contract: str, txs: list, semaphore
             dex_label = f"📈 {dex_info.get('dex_id', 'DEX')} Chart"
             button_rows.append([InlineKeyboardButton(text=dex_label, url=dex_info["url"])])
 
+        # Add Watch button
+        button_rows.append([
+            InlineKeyboardButton(text="👀 /watch", callback_data=f"watch:{chain}:{contract.lower()}")
+        ])
+
         reply_markup = InlineKeyboardMarkup(button_rows)
 
         # ── Build Telegram Message ────────────────────────────────────
         header_name = f"<b>{escape_html(name)}</b> ({escape_html(symbol)})\n" if name else ""
         minter_info = f" | 👥 Minters: <b>{unique_minters}</b>" if unique_minters is not None else ""
-        creator_info = f"\n👤 Creator: <code>{deployer_addr[:6]}...{deployer_addr[-4:]}</code>" if deployer_addr else ""
+        creator_info = f"\n👤 Creator: <code>{shorten_address(deployer_addr)}</code>" if deployer_addr else ""
         ethos_line = format_telegram_ethos_badge(ethos_profile)
         dex_line = f"\n{dex_info['formatted_line']}" if dex_info.get("formatted_line") else ""
+
+        eth_usd = get_eth_usd_price()
+        # Not easily detectable if it is a free mint during a new drop, but OpenSea might show floor=0
+        # Wait, if floor=0 we shouldn't show it as free mint unless we know it's a free mint.
+        floor_str = format_floor_display(floor=floor_val, eth_usd_price=eth_usd, is_free_mint=False, is_alert=True)
+        floor_line = f"\n{floor_str}" if floor_str else ""
 
         text = (
             f"🆕 <b>New NFT Drop Detected!</b>\n\n"
@@ -1207,6 +1229,7 @@ async def evaluate_contract_drop(chain: str, contract: str, txs: list, semaphore
             f"{ethos_line}\n"
             f"🏷️ Standard: <b>{standard}</b>\n"
             f"🔥 Mints: <b>{mint_count}</b> ({age_hours}h old){minter_info}"
+            f"{floor_line}"
             f"{dex_line}\n\n"
             f"<b>AI Legitimacy Audit:</b>\n"
             f"{verdict_badge(ai_result)}"

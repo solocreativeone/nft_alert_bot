@@ -59,10 +59,14 @@ async def send_floor_alert(col, floor, direction, image_url):
             [InlineKeyboardButton(text="🌊 View on OpenSea", url=f"https://opensea.io/collection/{slug}")]
         ])
 
+    from price_utils import get_eth_usd_price, format_floor_display
+    eth_usd = get_eth_usd_price()
+    floor_str = format_floor_display(floor, eth_usd, False, is_alert=True) or f"💰 Floor: {floor} ETH"
+
     text = (
         f"{headline}\n\n"
         f"<b>{escape_html(col['name'])}</b> [{chain}]\n"
-        f"Floor: <b>{floor} ETH</b>\n"
+        f"{floor_str}\n"
         f"{direction_line}"
     )
 

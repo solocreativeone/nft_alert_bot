@@ -68,7 +68,7 @@ async def main():
 
     # Initialize and run telegram bot
     await app.initialize()
-    await app.updater.start_polling(allowed_updates=["message"])
+    await app.updater.start_polling(allowed_updates=["message", "callback_query"])
     await app.start()
     
     print("[Commands] ✅ Telegram command listener started")
