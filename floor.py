@@ -103,13 +103,17 @@ async def check_floors():
                 print(f"[Floor] Cooldown active for {col['name']}, skipping alert")
                 continue
 
-            if floor < col["floor_alert_low"]:
-                await send_floor_alert(col, floor, "low", image_url)
-                floor_last_alerted[col["slug"]] = now
+            if col.get("floor_alerts_enabled", True):
+                if (
+                    col.get("floor_drop_alert_enabled", True)
+                    and floor < col["floor_alert_low"]
+                    ):
+                    await send_floor_alert(col, floor, "low", image_url)
+                    floor_last_alerted[col["slug"]] = now
 
             elif floor > col["floor_alert_high"]:
-                await send_floor_alert(col, floor, "high", image_url)
-                floor_last_alerted[col["slug"]] = now
+                    await send_floor_alert(col, floor, "high", image_url)
+                    floor_last_alerted[col["slug"]] = now
 
         except requests.exceptions.RequestException as e:
             print(f"[Floor Network Error] {col['name']}: {e}")
