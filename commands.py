@@ -33,7 +33,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/live [chain] : Check upcoming mints\n"
         "  Default chain: ethereum\n"
         "  Example: /live polygon\n"
-        "/status : Show bot status\n"
         "/help : Show all commands\n\n"
 
         "🌐 Supported chains\n"
@@ -285,7 +284,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/unwatch 0xContract - remove a collection\n"
         "/list - show all watched collections\n"
         "/live - check live & upcoming mints now\n"
-        "/status - show bot checkpoint and Gemini status\n"
         "/help - show this message"
     )
 
