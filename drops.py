@@ -17,11 +17,11 @@ from price_utils import get_eth_usd_price, format_floor_display, shorten_address
 import checkpoint
 
 try:
-    from private.config_live import MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE, MAX_CONTRACT_AGE_HOURS, MAX_CATCHUP_BLOCKS
+    from private.config_live import MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE, MAX_CONTRACT_AGE_HOURS, MAX_CATCHUP_BLOCKS, ARC_RPC_URL
     print("[Drops] ✅ Private config loaded")
 except ImportError as e:
     print(f"[Drops] ❌ ImportError: {e}")
-    from config import MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE, MAX_CONTRACT_AGE_HOURS, MAX_CATCHUP_BLOCKS
+    from config import MIN_MINTS_THRESHOLD, OPENSEA_API_KEY, GEMINI_MIN_SCORE, MAX_CONTRACT_AGE_HOURS, MAX_CATCHUP_BLOCKS, ARC_RPC_URL
 
 # Track contracts we've already alerted on with bounded cache. The in-memory pair
 # is a fast path; checkpoint.py holds the durable copy that survives restarts.
@@ -180,6 +180,16 @@ EVM_CHAINS = {
             "https://rpc.mainnet.chain.robinhood.com",
         ],
         "explorer": "https://robinhoodchain.blockscout.com",
+        "opensea_chain": None,
+        "block_step": 60,
+    },
+    # Arc mainnet — EVM-compatible, Chain ID 5042, native gas token USDC.
+    # Primary RPC is read from ARC_RPC_URL / ARC_RPC (env) so the key is never
+    # stored in source. Falls back to the public endpoint when neither is set.
+    # opensea_chain is None: Arc is not indexed by OpenSea at launch.
+    "arc": {
+        "rpcs": [ARC_RPC_URL],
+        "explorer": "https://arc.etherscan.io",
         "opensea_chain": None,
         "block_step": 60,
     },

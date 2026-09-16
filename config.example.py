@@ -10,6 +10,9 @@ CHAT_ID = os.environ.get("CHAT_ID")                  # Your Telegram chat ID
 OPENSEA_API_KEY = os.environ.get("OPENSEA_API_KEY")  # From opensea.io/developers
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")    # From aistudio.google.com
 
+# Arc EVM RPC endpoint (Chain ID 5042). Configurable via ARC_RPC_URL or ARC_RPC.
+ARC_RPC_URL = os.environ.get("ARC_RPC_URL") or os.environ.get("ARC_RPC", "https://rpc.mainnet.arc.io")
+
 # Extra Gemini keys for daily-quota rotation. Each free-tier key allows roughly
 # 500 requests per UTC day; when one is exhausted the bot rotates to the next.
 # Create additional keys under different Google accounts at aistudio.google.com.

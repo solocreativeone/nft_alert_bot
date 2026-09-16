@@ -9,6 +9,9 @@ CHAT_ID = os.environ.get("CHAT_ID")
 OPENSEA_API_KEY = os.environ.get("OPENSEA_API_KEY")
 GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY")
 
+# Arc EVM RPC endpoint (Chain ID 5042). Configurable via ARC_RPC_URL or ARC_RPC.
+ARC_RPC_URL = os.environ.get("ARC_RPC_URL") or os.environ.get("ARC_RPC", "https://rpc.mainnet.arc.io")
+
 # Additional Gemini keys for quota rotation. Each free-tier key is capped per day,
 # so the bot rotates to the next usable key when one is exhausted. Supply a
 # comma-separated list; GEMINI_API_KEY is always tried first.

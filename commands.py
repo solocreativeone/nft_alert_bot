@@ -42,7 +42,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/help : Show all commands\n\n"
 
         "🌐 Supported chains\n"
-        "ethereum, polygon, base, arbitrum, optimism, solana"
+        "ethereum, polygon, base, arbitrum, optimism, solana, arc"
     )
 
 
@@ -103,6 +103,7 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "arbitrum",
         "optimism",
         "robinhood",
+        "arc",
     ]
 
     if chain not in supported_chains:
