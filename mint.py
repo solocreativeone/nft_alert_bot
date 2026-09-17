@@ -31,6 +31,12 @@ def get_recent_mints(slug, since_timestamp):
 
 async def send_mint_alert(col, token_id, short_addr, image_url, chain):
     """Send a mint alert with the NFT image if available."""
+    from watchlist import get_watchlist
+    watched_contracts = {w.get("contract", "").lower() for w in get_watchlist() if "contract" in w}
+    if col.get("contract", "").lower() in watched_contracts:
+        # Watched collections generate floor signals, not raw mint alerts
+        return
+
     slug = col.get("slug", "")
     contract = col.get("contract", "")
 
@@ -63,9 +69,14 @@ async def check_mints():
 
     # Merge static config collections with dynamic watchlist
     all_collections = merge_with_config(COLLECTIONS)
+    from watchlist import get_watchlist
+    watched_contracts = {w.get("contract", "").lower() for w in get_watchlist() if "contract" in w}
 
     for col in all_collections:
         contract = col["contract"]
+        if contract.lower() in watched_contracts:
+            # Watched collections generate floor signals, not raw mint alerts
+            continue
         slug = col["slug"]
         chain = col.get("chain", "ethereum")
         try:
