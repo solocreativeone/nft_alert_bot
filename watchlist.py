@@ -43,6 +43,18 @@ def lookup_contract(contract_address, chain="ethereum"):
     Look up a contract on OpenSea and return collection details.
     Returns dict with name, slug, floor or None if not found.
     """
+    if chain.lower() == "arc":
+        return {
+            "name": f"Arc Collection {contract_address[:6]}...{contract_address[-4:]}",
+            "slug": "",
+            "chain": "arc",
+            "contract": contract_address.lower(),
+            "floor_alert_low": 0.01,
+            "floor_alert_high": 1.0,
+            "current_floor": 0.0,
+            "last_floor": None,
+        }
+
     headers = {"x-api-key": OPENSEA_API_KEY}
 
     # Step 1 — get collection slug from contract
@@ -83,6 +95,7 @@ def lookup_contract(contract_address, chain="ethereum"):
         "floor_alert_low": round(floor * 0.8, 4) if floor and floor > 0 else 0.01,
         "floor_alert_high": round(floor * 1.5, 4) if floor and floor > 0 else 1.0,
         "current_floor": floor,
+        "last_floor": floor if (floor and floor > 0) else None,
     }
 
 def add_to_watchlist(contract_address, chain="ethereum", custom_low=None, custom_high=None):
@@ -110,6 +123,14 @@ def add_to_watchlist(contract_address, chain="ethereum", custom_low=None, custom
 
     watchlist.append(col)
     save_watchlist(watchlist)
+
+    if col.get("last_floor") is not None:
+        try:
+            import checkpoint
+            checkpoint.set_floor(f"{chain}:{contract_lower}", col["last_floor"], flush_now=True)
+        except Exception:
+            pass
+
     return True, col
 
 def remove_from_watchlist(contract_address):
@@ -120,12 +141,24 @@ def remove_from_watchlist(contract_address):
     watchlist = load_watchlist()
     contract_lower = contract_address.lower()
     original_len = len(watchlist)
+
+    removed_items = [w for w in watchlist if w["contract"] == contract_lower]
     watchlist = [w for w in watchlist if w["contract"] != contract_lower]
 
     if len(watchlist) == original_len:
         return False, "Contract not found in watchlist."
 
     save_watchlist(watchlist)
+
+    try:
+        import checkpoint
+        for item in removed_items:
+            c = item.get("chain", "ethereum")
+            checkpoint.delete_floor(f"{c}:{contract_lower}", flush_now=True)
+            checkpoint.delete_floor(contract_lower, flush_now=True)
+    except Exception:
+        pass
+
     return True, "Removed successfully."
 
 def get_watchlist():
