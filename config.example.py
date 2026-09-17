@@ -50,6 +50,7 @@ DROPS_CHECK_INTERVAL = 1
 MINT_COOLDOWN_MINUTES = 10
 MIN_MINTS_THRESHOLD = 5
 FLOOR_COOLDOWN_MINUTES = 30
+WATCH_FLOOR_CHANGE_PERCENT = 10.0 # Floor movement threshold percentage for watched collections
 MAX_CONTRACT_AGE_HOURS = 48   # Skip drops whose contract was deployed longer ago than this
 MAX_CATCHUP_BLOCKS = 2000     # Max historical blocks to scan on resume (prevents days of catchup)
 MAX_SOLANA_SIGNATURE_PAGES = 3 # Max pages to search back for saved Solana signature before jumping to tip

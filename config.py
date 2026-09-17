@@ -64,6 +64,7 @@ DROPS_CHECK_INTERVAL = int(os.environ.get("DROPS_CHECK_INTERVAL", 1))
 MINT_COOLDOWN_MINUTES = int(os.environ.get("MINT_COOLDOWN_MINUTES", 10))
 MIN_MINTS_THRESHOLD = int(os.environ.get("MIN_MINTS_THRESHOLD", 5))
 FLOOR_COOLDOWN_MINUTES = int(os.environ.get("FLOOR_COOLDOWN_MINUTES", 30))
+WATCH_FLOOR_CHANGE_PERCENT = float(os.environ.get("WATCH_FLOOR_CHANGE_PERCENT", 10.0))
 
 # A "drop" is only fresh if its CONTRACT was deployed within this many hours.
 # Established collections that are still minting (open editions, etc.) are
