@@ -72,7 +72,7 @@ _hooks_installed = False
 
 
 def _empty_state():
-    return {"version": VERSION, "blocks": {}, "signatures": {}, "seen": {}, "gemini": {}}
+    return {"version": VERSION, "blocks": {}, "signatures": {}, "seen": {}, "gemini": {}, "floors": {}}
 
 
 def _coerce(raw):
@@ -84,6 +84,14 @@ def _coerce(raw):
     state = _empty_state()
     if not isinstance(raw, dict):
         return state
+
+    floors = raw.get("floors")
+    if isinstance(floors, dict):
+        for key, value in floors.items():
+            try:
+                state["floors"][str(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
 
     blocks = raw.get("blocks")
     if isinstance(blocks, dict):
@@ -341,6 +349,42 @@ def set_gemini_key_state(api_key: str, date: str, count: int, cooldown_until: fl
     }
     _mark_dirty()
     flush(force=flush_now)
+
+
+# ── Watched collection floor checkpoints ──────────────────────────────────────
+
+def get_floor(key: str) -> float | None:
+    """Last recorded floor price for a watched collection, or None if never set."""
+    if not key:
+        return None
+    return load().get("floors", {}).get(str(key))
+
+
+def set_floor(key: str, floor: float, flush_now: bool = False):
+    """Commit a recorded floor price checkpoint."""
+    if not key or floor is None:
+        return
+    try:
+        val = float(floor)
+    except (TypeError, ValueError):
+        return
+    state = load()
+    if "floors" not in state:
+        state["floors"] = {}
+    state["floors"][str(key)] = val
+    _mark_dirty()
+    flush(force=flush_now)
+
+
+def delete_floor(key: str, flush_now: bool = False):
+    """Remove a recorded floor price checkpoint."""
+    if not key:
+        return
+    state = load()
+    if "floors" in state and str(key) in state["floors"]:
+        del state["floors"][str(key)]
+        _mark_dirty()
+        flush(force=flush_now)
 
 
 # ── Test / maintenance helpers ───────────────────────────────────────────────
