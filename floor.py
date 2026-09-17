@@ -1,19 +1,50 @@
+import os
 import requests
 import asyncio
 from datetime import datetime, timezone
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from watchlist import merge_with_config
+from watchlist import merge_with_config, get_watchlist, save_watchlist
 from notifier import asend, asend_photo, download_image_bytes, escape_html
+import checkpoint
 
 try:
-    from private.config_live import OPENSEA_API_KEY, COLLECTIONS, FLOOR_COOLDOWN_MINUTES
+    from private.config_live import (
+        OPENSEA_API_KEY,
+        COLLECTIONS,
+        FLOOR_COOLDOWN_MINUTES,
+        WATCH_FLOOR_CHANGE_PERCENT,
+    )
 except ImportError:
-    from config import OPENSEA_API_KEY, COLLECTIONS, FLOOR_COOLDOWN_MINUTES
+    try:
+        from config import (
+            OPENSEA_API_KEY,
+            COLLECTIONS,
+            FLOOR_COOLDOWN_MINUTES,
+            WATCH_FLOOR_CHANGE_PERCENT,
+        )
+    except ImportError:
+        from config import OPENSEA_API_KEY, COLLECTIONS, FLOOR_COOLDOWN_MINUTES
+        WATCH_FLOOR_CHANGE_PERCENT = 10.0
 
 # Cooldown tracker
 floor_last_alerted = {}
 
+
+def get_floor_change_threshold() -> float:
+    """Get floor change percentage threshold from env, falling back to config."""
+    env_val = os.environ.get("WATCH_FLOOR_CHANGE_PERCENT")
+    if env_val is not None:
+        try:
+            return float(env_val)
+        except ValueError:
+            pass
+    return float(WATCH_FLOOR_CHANGE_PERCENT)
+
+
 def get_floor_and_image(slug):
+    if not slug:
+        return None, None
+
     headers = {"x-api-key": OPENSEA_API_KEY}
 
     # Get floor price
@@ -40,6 +71,123 @@ def get_floor_and_image(slug):
         pass  # Image is optional — don't block the alert
 
     return floor, image_url
+
+
+async def send_floor_signal(col, prev_floor, current_floor, direction, image_url=None, eth_usd_price=None):
+    """Send a Floor Pump or Floor Dump signal for a watched collection."""
+    if direction in ("pump", "high", "up"):
+        headline = "🚀 <b>Floor Pump</b>"
+    else:
+        headline = "🔻 <b>Floor Dump</b>"
+
+    chain = col.get("chain", "ethereum").capitalize()
+    name = col.get("name", "Unknown")
+    slug = col.get("slug", "")
+
+    change_pct = ((current_floor - prev_floor) / prev_floor) * 100.0
+
+    from price_utils import get_eth_usd_price, format_eth, format_usd
+    eth_usd = eth_usd_price if eth_usd_price is not None else get_eth_usd_price()
+    usd_str = format_usd(current_floor * eth_usd) if (eth_usd is not None and eth_usd > 0) else "N/A"
+
+    reply_markup = None
+    if slug:
+        reply_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton(text="🌊 View on OpenSea", url=f"https://opensea.io/collection/{slug}")]
+        ])
+
+    text = (
+        f"{headline}\n\n"
+        f"<b>Collection:</b> {escape_html(name)}\n"
+        f"<b>Chain:</b> {chain}\n\n"
+        f"Floor: {format_eth(prev_floor)} ETH → {format_eth(current_floor)} ETH\n"
+        f"Change: {change_pct:+.2f}%\n"
+        f"USD: {usd_str}"
+    )
+
+    sent = False
+    if image_url:
+        try:
+            image_bytes = await download_image_bytes(image_url)
+            if image_bytes:
+                await asend_photo(image_bytes, caption=text, parse_mode="HTML", reply_markup=reply_markup)
+                sent = True
+        except Exception as e:
+            print(f"[Floor] Photo send failed: {e} — falling back to text")
+
+    if not sent:
+        await asend(text, reply_markup=reply_markup)
+
+
+async def check_watched_floor_signals():
+    """Poll floor prices for all watched collections and trigger floor movement signals."""
+    watchlist = get_watchlist()
+    if not watchlist:
+        return
+
+    threshold = get_floor_change_threshold()
+    dirty = False
+
+    for item in watchlist:
+        contract = item.get("contract", "").lower()
+        chain = item.get("chain", "ethereum").lower()
+        key = f"{chain}:{contract}"
+        slug = item.get("slug", "")
+
+        try:
+            floor, image_url = await asyncio.to_thread(get_floor_and_image, slug)
+        except Exception as e:
+            print(f"[Floor] Error fetching floor for {item.get('name')}: {e}")
+            continue
+
+        # Handle floor price = 0 / missing floor safely
+        if floor is None or floor <= 0:
+            continue
+
+        # Check existing recorded baseline
+        prev_floor = checkpoint.get_floor(key)
+        if prev_floor is None:
+            prev_floor = checkpoint.get_floor(contract)
+        if prev_floor is None:
+            prev_floor = item.get("last_floor")
+
+        # First floor observation: establish baseline without sending pump/dump signal
+        if prev_floor is None or prev_floor <= 0:
+            checkpoint.set_floor(key, floor, flush_now=True)
+            item["last_floor"] = floor
+            item["current_floor"] = floor
+            dirty = True
+            continue
+
+        # Avoid duplicate alerts caused by polling the same unchanged floor
+        if floor == prev_floor or floor == item.get("current_floor"):
+            continue
+
+        # Calculate percentage movement from baseline
+        change_pct = ((floor - prev_floor) / prev_floor) * 100.0
+
+        if change_pct >= threshold:
+            direction = "pump"
+        elif change_pct <= -threshold:
+            direction = "dump"
+        else:
+            # Movement below threshold sends nothing
+            item["current_floor"] = floor
+            dirty = True
+            continue
+
+        # Trigger floor signal
+        await send_floor_signal(item, prev_floor, floor, direction, image_url)
+
+        # Persist the new baseline floor to survive restart/reload
+        checkpoint.set_floor(key, floor, flush_now=True)
+        item["last_floor"] = floor
+        item["current_floor"] = floor
+        dirty = True
+
+    if dirty:
+        save_watchlist(watchlist)
+
 
 async def send_floor_alert(col, floor, direction, image_url):
     """Send a floor alert, with collection image if available."""
@@ -70,27 +218,44 @@ async def send_floor_alert(col, floor, direction, image_url):
         f"{direction_line}"
     )
 
+    disable_notification = (direction == "low" and bool(col.get("silent_floor_drop_alert", False)))
+
     sent = False
     if image_url:
         try:
             image_bytes = await download_image_bytes(image_url)
             if image_bytes:
-                await asend_photo(image_bytes, caption=text, parse_mode="HTML", reply_markup=reply_markup)
+                await asend_photo(
+                    image_bytes,
+                    caption=text,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup,
+                    disable_notification=disable_notification,
+                )
                 sent = True
         except Exception as e:
             print(f"[Floor] Photo send failed: {e} — falling back to text")
 
     if not sent:
-        await asend(text, reply_markup=reply_markup)
+        await asend(text, reply_markup=reply_markup, disable_notification=disable_notification)
+
 
 async def check_floors():
     print("[Floor] Running floor price check...")
 
+    # First, process floor signals for dynamically watched collections
+    await check_watched_floor_signals()
+
+    # Next, check static target-based alerts for collections in config
+    watched_contracts = {w.get("contract", "").lower() for w in get_watchlist() if "contract" in w}
     all_collections = merge_with_config(COLLECTIONS)
 
     for col in all_collections:
+        if col.get("contract", "").lower() in watched_contracts:
+            # Watched collections generate floor signals instead of static target alerts
+            continue
         try:
-            floor, image_url = await asyncio.to_thread(get_floor_and_image, col["slug"])
+            floor, image_url = await asyncio.to_thread(get_floor_and_image, col.get("slug", ""))
             if floor is None:
                 continue  # Rate limited — skip this cycle
 
