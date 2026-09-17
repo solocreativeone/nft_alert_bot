@@ -1,4 +1,7 @@
 import asyncio
+import functools
+import inspect
+import os
 import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -18,9 +21,111 @@ except ImportError:
 # Valid Ethereum address pattern
 ETH_ADDRESS_PATTERN = re.compile(r'^0x[a-fA-F0-9]{40}$')
 
+# Auto-cleanup delay in seconds (default: 15 seconds)
+COMMAND_CLEANUP_SECONDS = float(os.environ.get("COMMAND_CLEANUP_SECONDS", 15.0))
+
+
+async def safe_delete_message(message):
+    """Attempt to delete a message, handling errors gracefully without crashing."""
+    if message is None:
+        return
+    try:
+        delete_fn = getattr(message, "delete", None)
+        if callable(delete_fn):
+            res = delete_fn()
+            if inspect.isawaitable(res):
+                await res
+    except Exception:
+        # Gracefully ignore deletion failures (missing permissions, already deleted, etc.)
+        pass
+
+
+async def _delete_messages_after_delay(messages, delay=COMMAND_CLEANUP_SECONDS):
+    try:
+        if delay > 0:
+            await asyncio.sleep(delay)
+        for msg in messages:
+            await safe_delete_message(msg)
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        pass
+
+
+def schedule_message_cleanup(messages, delay=COMMAND_CLEANUP_SECONDS):
+    """Schedule background deletion of messages after delay seconds."""
+    if not isinstance(messages, (list, tuple, set)):
+        messages = [messages]
+    valid_msgs = [m for m in messages if m is not None]
+    if not valid_msgs:
+        return None
+    return asyncio.create_task(_delete_messages_after_delay(valid_msgs, delay))
+
+
+class _CleanupMessageProxy:
+    """Forward a command message while recording messages sent by reply_text."""
+
+    def __init__(self, message, responses):
+        self._message = message
+        self._responses = responses
+
+    def __getattr__(self, name):
+        return getattr(self._message, name)
+
+    async def reply_text(self, *args, **kwargs):
+        result = self._message.reply_text(*args, **kwargs)
+        response = await result if inspect.isawaitable(result) else result
+        if response is not None:
+            self._responses.append(response)
+        return response
+
+
+class _CleanupUpdateProxy:
+    """Expose the original update except for its tracked command message."""
+
+    def __init__(self, update, message):
+        self._update = update
+        self.message = message
+
+    def __getattr__(self, name):
+        return getattr(self._update, name)
+
+
+def auto_cleanup(handler):
+    """Decorator to automatically delete user command message and bot responses after 15 seconds."""
+    @functools.wraps(handler)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        if not update or not hasattr(update, "effective_chat") or not update.effective_chat:
+            return await handler(update, context, *args, **kwargs)
+
+        if str(update.effective_chat.id) != str(CHAT_ID).strip():
+            return await handler(update, context, *args, **kwargs)
+
+        user_msg = getattr(update, "message", None)
+        bot_responses = []
+        command_update = update
+        if user_msg is not None and hasattr(user_msg, "reply_text"):
+            command_update = _CleanupUpdateProxy(
+                update,
+                _CleanupMessageProxy(user_msg, bot_responses),
+            )
+
+        try:
+            return await handler(command_update, context, *args, **kwargs)
+        finally:
+            delay = float(os.environ.get("COMMAND_CLEANUP_SECONDS", COMMAND_CLEANUP_SECONDS))
+            messages_to_delete = []
+            if user_msg is not None:
+                messages_to_delete.append(user_msg)
+            messages_to_delete.extend(bot_responses)
+            schedule_message_cleanup(messages_to_delete, delay=delay)
+
+    return wrapper
+
 
 # Command Handlers
 
+@auto_cleanup
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_chat.id) != str(CHAT_ID).strip():
         return
@@ -46,6 +151,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+@auto_cleanup
 async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_chat.id) != str(CHAT_ID).strip():
         return
@@ -77,6 +183,7 @@ async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+@auto_cleanup
 async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_chat.id) != str(CHAT_ID).strip():
         return
@@ -166,6 +273,7 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+@auto_cleanup
 async def unwatch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_chat.id) != str(CHAT_ID).strip():
         return
@@ -254,6 +362,7 @@ def render_watchlist_message(watchlist, eth_usd_price=None):
     return full_text, reply_markup
 
 
+@auto_cleanup
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_chat.id) != str(CHAT_ID).strip():
         return
@@ -368,6 +477,7 @@ async def unwatch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+@auto_cleanup
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Report scan checkpoint position and Gemini key-pool quota usage.
 
@@ -432,6 +542,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+@auto_cleanup
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_chat.id) != str(CHAT_ID).strip():
         return
