@@ -62,6 +62,28 @@ def schedule_message_cleanup(messages, delay=COMMAND_CLEANUP_SECONDS):
     return asyncio.create_task(_delete_messages_after_delay(valid_msgs, delay))
 
 
+def _watch_confirmation(col):
+    """Render the signal-based confirmation shared by /watch entry points."""
+    floor_display = format_floor_display(
+        floor=col.get("current_floor"),
+        eth_usd_price=get_eth_usd_price(),
+        is_free_mint=bool(col.get("is_free_mint") or col.get("free_mint")),
+        is_alert=False,
+    )
+    lines = [
+        f"✅ Now watching: {col.get('name', 'Unknown')} "
+        f"[{col.get('chain', 'ethereum').capitalize()}]",
+        f"Contract: {shorten_address(col.get('contract', ''))}",
+        "📊 Floor signal: ±10%",
+    ]
+    if floor_display:
+        lines.append(floor_display)
+    slug = col.get("slug")
+    if slug:
+        lines.append(f"🔗 https://opensea.io/collection/{slug}")
+    return "\n".join(lines)
+
+
 class _CleanupMessageProxy:
     """Forward a command message while recording messages sent by reply_text."""
 
@@ -244,33 +266,7 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ {result}")
         return
 
-    col = result
-    short_addr = shorten_address(col["contract"])
-    eth_usd_price = get_eth_usd_price()
-    floor_val = col.get("current_floor")
-    is_free = bool(col.get("is_free_mint") or col.get("free_mint"))
-    floor_display = format_floor_display(
-        floor=floor_val,
-        eth_usd_price=eth_usd_price,
-        is_free_mint=is_free,
-        is_alert=False,
-    )
-    if floor_display == "🆓 Free Mint":
-        floor_line = "🆓 Free Mint\n"
-    elif floor_display:
-        floor_line = f"Current {floor_display[0].lower() + floor_display[1:]}\n"
-    else:
-        floor_line = ""
-
-    await update.message.reply_text(
-        f"✅ Now watching: {col['name']} "
-        f"[{col['chain'].capitalize()}]\n"
-        f"Contract: {short_addr}\n"
-        f"{floor_line}"
-        f"🚨 Alert low: {col['floor_alert_low']} ETH\n"
-        f"🚀 Alert high: {col['floor_alert_high']} ETH\n"
-        f"🔗 https://opensea.io/collection/{col['slug']}"
-    )
+    await update.message.reply_text(_watch_confirmation(result))
 
 
 @auto_cleanup
@@ -309,7 +305,7 @@ async def unwatch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def render_watchlist_message(watchlist, eth_usd_price=None):
     """Render watchlist text and inline keyboard markup with /unwatch actions."""
     if not watchlist:
-        return "📂 Watchlist is empty.", None
+        return "📂 Current Watchlist:\n\nNo collections currently being watched.", None
 
     if eth_usd_price is None:
         eth_usd_price = get_eth_usd_price()
@@ -412,34 +408,7 @@ async def watch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(f"❌ {result}")
         return
 
-    col = result
-    short_addr = shorten_address(col.get("contract", contract))
-    eth_usd_price = get_eth_usd_price()
-    floor_val = col.get("current_floor")
-    is_free = bool(col.get("is_free_mint") or col.get("free_mint"))
-
-    floor_display = format_floor_display(
-        floor=floor_val,
-        eth_usd_price=eth_usd_price,
-        is_free_mint=is_free,
-        is_alert=False,
-    )
-    if floor_display == "🆓 Free Mint":
-        floor_line = "🆓 Free Mint\n"
-    elif floor_display:
-        floor_line = f"Current {floor_display[0].lower() + floor_display[1:]}\n"
-    else:
-        floor_line = ""
-
-    reply_text = (
-        f"✅ Now watching: {col['name']} "
-        f"[{col['chain'].capitalize()}]\n"
-        f"Contract: {short_addr}\n"
-        f"{floor_line}"
-        f"🚨 Alert low: {col['floor_alert_low']} ETH\n"
-        f"🚀 Alert high: {col['floor_alert_high']} ETH\n"
-        f"🔗 https://opensea.io/collection/{col['slug']}"
-    )
+    reply_text = _watch_confirmation(result)
     if query.message:
         await query.message.reply_text(reply_text)
 

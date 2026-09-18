@@ -7,6 +7,11 @@ WATCHLIST_FILE = "watchlist.json"
 _watchlist_cache = None
 _lock = threading.Lock()
 
+
+def normalize_contract(contract_address):
+    """Return the canonical form used for watchlist comparisons and keys."""
+    return (contract_address or "").strip().lower()
+
 try:
     from private.config_live import OPENSEA_API_KEY
 except ImportError:
@@ -106,9 +111,10 @@ def add_to_watchlist(contract_address, chain="ethereum", custom_low=None, custom
     watchlist = load_watchlist()
 
     # Check if already watching
-    contract_lower = contract_address.lower()
+    contract_lower = normalize_contract(contract_address)
     for item in watchlist:
-        if item["contract"] == contract_lower and item.get("chain", "ethereum") == chain:
+        if (normalize_contract(item.get("contract")) == contract_lower
+                and item.get("chain", "ethereum") == chain):
             return False, f"Already watching {item['name']} on {chain}"
 
     # Look up on OpenSea
@@ -139,11 +145,17 @@ def remove_from_watchlist(contract_address):
     Returns (success, message) tuple.
     """
     watchlist = load_watchlist()
-    contract_lower = contract_address.lower()
+    contract_lower = normalize_contract(contract_address)
     original_len = len(watchlist)
 
-    removed_items = [w for w in watchlist if w["contract"] == contract_lower]
-    watchlist = [w for w in watchlist if w["contract"] != contract_lower]
+    removed_items = [
+        w for w in watchlist
+        if normalize_contract(w.get("contract")) == contract_lower
+    ]
+    watchlist = [
+        w for w in watchlist
+        if normalize_contract(w.get("contract")) != contract_lower
+    ]
 
     if len(watchlist) == original_len:
         return False, "Contract not found in watchlist."
@@ -171,12 +183,14 @@ def merge_with_config(config_collections):
     Used by floor.py and mint.py to get full list.
     """
     watchlist = load_watchlist()
-    watchlist_contracts = {w["contract"] for w in watchlist}
+    watchlist_contracts = {
+        normalize_contract(w.get("contract")) for w in watchlist
+    }
 
     # Add config collections not already in watchlist
     merged = list(watchlist)
     for col in config_collections:
-        if col["contract"].lower() not in watchlist_contracts:
+        if normalize_contract(col.get("contract")) not in watchlist_contracts:
             merged.append(col)
 
     return merged
