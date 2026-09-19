@@ -18,6 +18,8 @@ try:
 except ImportError:
     from config import TELEGRAM_TOKEN, CHAT_ID
 
+CHAT_IDS = [cid.strip() for cid in str(CHAT_ID).split(",") if cid.strip()]
+
 _bot = None
 
 
@@ -258,13 +260,14 @@ async def download_image_bytes(url):
 
 async def asend(text, parse_mode="HTML", reply_markup=None):
     """Async send — HTML mode by default, link previews suppressed."""
-    await get_bot().send_message(
-        chat_id=CHAT_ID,
-        text=text,
-        parse_mode=parse_mode,
-        disable_web_page_preview=True,
-        reply_markup=reply_markup,
-    )
+    for chat_id in CHAT_IDS:
+        await get_bot().send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=parse_mode,
+            disable_web_page_preview=True,
+            reply_markup=reply_markup,
+        )
 
 
 async def asend_photo(photo, caption=None, parse_mode=None, reply_markup=None):
@@ -272,11 +275,12 @@ async def asend_photo(photo, caption=None, parse_mode=None, reply_markup=None):
     # Telegram hard limit for photo captions is 1024 chars
     if caption and len(caption) > 1024:
         caption = caption[:1020] + "..."
-    await get_bot().send_photo(
-        chat_id=CHAT_ID,
-        photo=photo,
-        caption=caption,
-        parse_mode=parse_mode,
-        reply_markup=reply_markup,
-    )
+    for chat_id in CHAT_IDS:
+        await get_bot().send_photo(
+            chat_id=chat_id,
+            photo=photo,
+            caption=caption,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
 

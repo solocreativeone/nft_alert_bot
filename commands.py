@@ -120,8 +120,9 @@ def auto_cleanup(handler):
         if not update or not hasattr(update, "effective_chat") or not update.effective_chat:
             return await handler(update, context, *args, **kwargs)
 
-        if str(update.effective_chat.id) != str(CHAT_ID).strip():
-            return await handler(update, context, *args, **kwargs)
+        allowed_ids = {cid.strip() for cid in str(CHAT_ID).split(",") if cid.strip()}
+        if str(update.effective_chat.id) not in allowed_ids:
+            return
 
         user_msg = getattr(update, "message", None)
         bot_responses = []
@@ -149,7 +150,8 @@ def auto_cleanup(handler):
 
 @auto_cleanup
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_chat.id) != str(CHAT_ID).strip():
+    allowed_ids = {cid.strip() for cid in str(CHAT_ID).split(",") if cid.strip()}
+    if str(update.effective_chat.id) not in allowed_ids:
         return
 
     await update.message.reply_text(
@@ -175,7 +177,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @auto_cleanup
 async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_chat.id) != str(CHAT_ID).strip():
+    allowed_ids = {cid.strip() for cid in str(CHAT_ID).split(",") if cid.strip()}
+    if str(update.effective_chat.id) not in allowed_ids:
         return
 
     from live_drops import get_live_drops_summary, NFTCALENDAR_CHAINS
@@ -207,7 +210,8 @@ async def live_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @auto_cleanup
 async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_chat.id) != str(CHAT_ID).strip():
+    allowed_ids = {cid.strip() for cid in str(CHAT_ID).split(",") if cid.strip()}
+    if str(update.effective_chat.id) not in allowed_ids:
         return
 
     if not context.args:
@@ -271,7 +275,8 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @auto_cleanup
 async def unwatch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_chat.id) != str(CHAT_ID).strip():
+    allowed_ids = {cid.strip() for cid in str(CHAT_ID).split(",") if cid.strip()}
+    if str(update.effective_chat.id) not in allowed_ids:
         return
 
     if not context.args:
@@ -360,7 +365,8 @@ def render_watchlist_message(watchlist, eth_usd_price=None):
 
 @auto_cleanup
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_chat.id) != str(CHAT_ID).strip():
+    allowed_ids = {cid.strip() for cid in str(CHAT_ID).split(",") if cid.strip()}
+    if str(update.effective_chat.id) not in allowed_ids:
         return
 
     watchlist = get_watchlist()
@@ -379,7 +385,8 @@ async def watch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query:
         return
-    if str(update.effective_chat.id) != str(CHAT_ID).strip():
+    allowed_ids = {cid.strip() for cid in str(CHAT_ID).split(",") if cid.strip()}
+    if str(update.effective_chat.id) not in allowed_ids:
         return
 
     await query.answer()
@@ -418,7 +425,8 @@ async def unwatch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query:
         return
-    if str(update.effective_chat.id) != str(CHAT_ID).strip():
+    allowed_ids = {cid.strip() for cid in str(CHAT_ID).split(",") if cid.strip()}
+    if str(update.effective_chat.id) not in allowed_ids:
         return
 
     await query.answer()
@@ -453,7 +461,8 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Lets you confirm from Telegram that the bot resumed from its saved position
     and see which API keys still have quota, without shell access to the host.
     """
-    if str(update.effective_chat.id) != str(CHAT_ID).strip():
+    allowed_ids = {cid.strip() for cid in str(CHAT_ID).split(",") if cid.strip()}
+    if str(update.effective_chat.id) not in allowed_ids:
         return
 
     import checkpoint
@@ -513,7 +522,8 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @auto_cleanup
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_chat.id) != str(CHAT_ID).strip():
+    allowed_ids = {cid.strip() for cid in str(CHAT_ID).split(",") if cid.strip()}
+    if str(update.effective_chat.id) not in allowed_ids:
         return
 
     await update.message.reply_text(
