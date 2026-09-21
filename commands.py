@@ -539,8 +539,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # App Builder
 
+async def _log_error(update, context):
+    print(f"[ERROR HANDLER] Exception while processing update: {context.error!r}")
+    import traceback
+    traceback.print_exception(type(context.error), context.error, context.error.__traceback__)
+
+
 def build_app():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app.add_error_handler(_log_error)
 
     app.add_handler(
         CommandHandler("start", start_command)
