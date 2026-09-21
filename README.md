@@ -171,12 +171,14 @@ Manage your watchlist directly from Telegram without editing config files:
 | Command | Description |
 |---|---|
 | `/start` | Welcome message and list of commands |
-| `/watch <0xContract>` | Add a contract to your watchlist |
+| `/watch <0xContract> [chain]` | Add a contract to percentage-based floor signals |
 | `/unwatch <0xContract>` | Remove a contract from your watchlist |
 | `/list` | Show your active watched collections |
 | `/live` | View the top 10 upcoming Ethereum mints immediately |
 | `/status` | Show the last processed block per chain, how many mints are remembered, and Gemini key quota usage |
 | `/help` | Display command help |
+
+`/watch` signals when the floor moves by `WATCH_FLOOR_CHANGE_PERCENT` (10% by default); its first observed floor establishes the baseline. Arc contracts can be watched, but Arc is not indexed by the configured OpenSea floor provider and this project has no Arc floor fallback, so Arc floor values and floor signals are omitted until a supported provider is added.
 
 ---
 

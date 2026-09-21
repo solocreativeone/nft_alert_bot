@@ -115,7 +115,7 @@ def test_list_command_empty(monkeypatch):
     monkeypatch.setattr(commands, "get_watchlist", lambda: [])
     update, msg = _fake_update("123")
     asyncio.run(commands.list_command(update, None))
-    assert "Watchlist is empty" in msg.sent[0]
+    assert "No collections currently being watched" in msg.sent[0]
 
 def test_list_command_with_items(monkeypatch):
     monkeypatch.setattr(commands, "CHAT_ID", "123")
