@@ -226,27 +226,10 @@ _score_cache: dict = {}   # contract_address -> result
 
 # ── Prompt ────────────────────────────────────────────────────────────────────
 
-_PROMPT = """\
-You are an expert on-chain NFT researcher and smart contract risk auditor.
-Analyze the provided NFT contract data (metrics, collection name/symbol, metadata sample, contract source, deployer history, and DEX liquidity if available) and provide an objective risk & legitimacy assessment.
-
-Evaluation Criteria:
-1. Mint Distribution: Penalize low unique minters relative to total mints (e.g. 5,000 mints from 2 wallets is a bot/self-mint). Reward organic wallet diversity.
-2. Velocity: Extreme velocity (>1000 mints/hour on unknown contracts) is suspicious. Steady mints (5-150/hr) indicate genuine interest.
-3. Collection Identity: Flag copycats (e.g. fake "Bored Ape", "CryptoPunk", generic "TEST" names). Look for authentic original names/symbols.
-4. Metadata & Art: Check if token metadata or image URI is available, decentralized (IPFS/Arweave), or missing/broken.
-5. Contract Source: If verified source is provided, check for honeypots, hidden mint fees, malicious transfer restrictions, or safe standard OpenZeppelin implementations.
-6. Deployer Reputation & History: Consider deployer wallet past launches, previous rug counts, and average historical scores if present.
-7. Ethos Network Credibility & Social Standing: Consider the creator's Ethos credibility score, linked verified Twitter/Farcaster identities, community vouches, or negative slash flags. High Ethos score (>1000) or verified handles strongly indicate a legitimate creator.
-8. DEX Liquidity & Trading Activity: Check if an active DEX liquidity pool exists (e.g., Uniswap pair with backed liquidity). Genuine liquidity backing strongly signals a real project; $0 liquidity or pump-and-dump profiles raise risk.
-
-Return ONLY a JSON object with this exact schema (no markdown, no backticks):
-{
-  "score": <int between 0 and 100>,
-  "verdict": "LEGIT" | "SUSPICIOUS" | "LIKELY_RUG",
-  "reason": "<1-2 clear, punchy sentences explaining the verdict and key risk/legitimacy factors>"
-}
-"""
+try:
+    from private.prompts import NFT_LEGITIMACY_PROMPT as _PROMPT
+except ImportError:
+    from prompts_example import NFT_LEGITIMACY_PROMPT as _PROMPT
 
 # ── Public API ─────────────────────────────────────────────────────────────────
 
