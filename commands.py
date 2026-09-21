@@ -5,7 +5,7 @@ import os
 import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from watchlist import add_to_watchlist, remove_from_watchlist, get_watchlist
+from watchlist import add_to_watchlist, remove_from_watchlist, get_watchlist, get_collection_url
 from price_utils import (
     shorten_address,
     get_eth_usd_price,
@@ -17,6 +17,10 @@ try:
     from private.config_live import TELEGRAM_TOKEN, CHAT_ID
 except ImportError:
     from config import TELEGRAM_TOKEN, CHAT_ID
+try:
+    from private.config_live import WATCH_FLOOR_CHANGE_PERCENT
+except ImportError:
+    from config import WATCH_FLOOR_CHANGE_PERCENT
 
 # Valid Ethereum address pattern
 ETH_ADDRESS_PATTERN = re.compile(r'^0x[a-fA-F0-9]{40}$')
@@ -74,14 +78,22 @@ def _watch_confirmation(col):
         f"✅ Now watching: {col.get('name', 'Unknown')} "
         f"[{col.get('chain', 'ethereum').capitalize()}]",
         f"Contract: {shorten_address(col.get('contract', ''))}",
-        "📊 Floor signal: ±10%",
+        f"📊 Floor signal: ±{_watch_floor_change_percent():g}%",
     ]
     if floor_display:
         lines.append(floor_display)
-    slug = col.get("slug")
-    if slug:
-        lines.append(f"🔗 https://opensea.io/collection/{slug}")
+    collection_url = get_collection_url(col)
+    if collection_url:
+        lines.append(f"🔗 {collection_url}")
     return "\n".join(lines)
+
+
+def _watch_floor_change_percent():
+    """Use the same configured threshold displayed by /watch and floor checks."""
+    try:
+        return float(os.environ.get("WATCH_FLOOR_CHANGE_PERCENT", WATCH_FLOOR_CHANGE_PERCENT))
+    except (TypeError, ValueError):
+        return float(WATCH_FLOOR_CHANGE_PERCENT)
 
 
 class _CleanupMessageProxy:
@@ -325,11 +337,11 @@ def render_watchlist_message(watchlist, eth_usd_price=None):
         ).capitalize()
         contract = item.get("contract", "")
         short_addr = shorten_address(contract)
-        slug = item.get("slug", "")
+        collection_url = get_collection_url(item)
 
         name_display = (
-            f"<a href='https://opensea.io/collection/{slug}'>{escape_html(item['name'])}</a>"
-            if slug
+            f"<a href='{collection_url}'>{escape_html(item['name'])}</a>"
+            if collection_url
             else escape_html(item.get("name", "Unknown"))
         )
 
@@ -352,7 +364,7 @@ def render_watchlist_message(watchlist, eth_usd_price=None):
 
         items_output.append("\n".join(item_lines))
 
-        btn_text = "/unwatch" if len(watchlist) == 1 else f"/unwatch {idx}. {item.get('name', '')[:20]}"
+        btn_text = f"🗑 Unwatch {item.get('name', 'collection')[:45]}"
         button_rows.append([
             InlineKeyboardButton(text=btn_text, callback_data=f"unwatch:{contract.lower()}")
         ])

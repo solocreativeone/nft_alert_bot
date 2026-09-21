@@ -2,15 +2,27 @@ import json
 import os
 import requests
 import threading
+import re
 
 WATCHLIST_FILE = "watchlist.json"
 _watchlist_cache = None
 _lock = threading.Lock()
+_OPENSEA_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
 def normalize_contract(contract_address):
     """Return the canonical form used for watchlist comparisons and keys."""
     return (contract_address or "").strip().lower()
+
+
+def get_collection_url(collection):
+    """Return a valid OpenSea collection URL for a collection, if it has one."""
+    slug = (collection.get("slug") or "").strip()
+    if collection.get("chain", "ethereum").lower() == "arc":
+        return None
+    if not _OPENSEA_SLUG_PATTERN.fullmatch(slug):
+        return None
+    return f"https://opensea.io/collection/{slug}"
 
 try:
     from private.config_live import OPENSEA_API_KEY
@@ -49,14 +61,15 @@ def lookup_contract(contract_address, chain="ethereum"):
     Returns dict with name, slug, floor or None if not found.
     """
     if chain.lower() == "arc":
+        # Arc is not indexed by OpenSea and this project has no other floor
+        # provider for it. Keep the collection watchable, but do not fabricate
+        # a floor, slug, or marketplace URL.
         return {
             "name": f"Arc Collection {contract_address[:6]}...{contract_address[-4:]}",
             "slug": "",
             "chain": "arc",
             "contract": contract_address.lower(),
-            "floor_alert_low": 0.01,
-            "floor_alert_high": 1.0,
-            "current_floor": 0.0,
+            "current_floor": None,
             "last_floor": None,
         }
 
@@ -97,10 +110,11 @@ def lookup_contract(contract_address, chain="ethereum"):
         "slug": slug,
         "chain": chain,
         "contract": contract_address.lower(),
-        "floor_alert_low": round(floor * 0.8, 4) if floor and floor > 0 else 0.01,
-        "floor_alert_high": round(floor * 1.5, 4) if floor and floor > 0 else 1.0,
+        # current_floor is display data only. last_floor deliberately starts
+        # empty so the first polling observation establishes the signal
+        # baseline (including after an unwatch/re-watch cycle).
         "current_floor": floor,
-        "last_floor": floor if (floor and floor > 0) else None,
+        "last_floor": None,
     }
 
 def add_to_watchlist(contract_address, chain="ethereum", custom_low=None, custom_high=None):
@@ -122,20 +136,8 @@ def add_to_watchlist(contract_address, chain="ethereum", custom_low=None, custom
     if not col:
         return False, f"Could not find collection on OpenSea for chain {chain}."
 
-    if custom_low is not None:
-        col["floor_alert_low"] = custom_low
-    if custom_high is not None:
-        col["floor_alert_high"] = custom_high
-
     watchlist.append(col)
     save_watchlist(watchlist)
-
-    if col.get("last_floor") is not None:
-        try:
-            import checkpoint
-            checkpoint.set_floor(f"{chain}:{contract_lower}", col["last_floor"], flush_now=True)
-        except Exception:
-            pass
 
     return True, col
 

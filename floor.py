@@ -3,7 +3,7 @@ import requests
 import asyncio
 from datetime import datetime, timezone
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from watchlist import merge_with_config, get_watchlist, save_watchlist
+from watchlist import merge_with_config, get_watchlist, save_watchlist, get_collection_url, normalize_contract
 from notifier import asend, asend_photo, download_image_bytes, escape_html
 import checkpoint
 
@@ -82,7 +82,7 @@ async def send_floor_signal(col, prev_floor, current_floor, direction, image_url
 
     chain = col.get("chain", "ethereum").capitalize()
     name = col.get("name", "Unknown")
-    slug = col.get("slug", "")
+    collection_url = get_collection_url(col)
 
     change_pct = ((current_floor - prev_floor) / prev_floor) * 100.0
 
@@ -91,18 +91,17 @@ async def send_floor_signal(col, prev_floor, current_floor, direction, image_url
     usd_str = format_usd(current_floor * eth_usd) if (eth_usd is not None and eth_usd > 0) else "N/A"
 
     reply_markup = None
-    if slug:
+    if collection_url:
         reply_markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton(text="🌊 View on OpenSea", url=f"https://opensea.io/collection/{slug}")]
+            [InlineKeyboardButton(text="🌊 View on OpenSea", url=collection_url)]
         ])
 
     text = (
         f"{headline}\n\n"
-        f"<b>Collection:</b> {escape_html(name)}\n"
-        f"<b>Chain:</b> {chain}\n\n"
+        f"<b>{escape_html(name)}</b> [{chain}]\n\n"
         f"Floor: {format_eth(prev_floor)} ETH → {format_eth(current_floor)} ETH\n"
         f"Change: {change_pct:+.2f}%\n"
-        f"USD: {usd_str}"
+        f"Current: {usd_str}"
     )
 
     sent = False
@@ -129,7 +128,7 @@ async def check_watched_floor_signals():
     dirty = False
 
     for item in watchlist:
-        contract = item.get("contract", "").lower()
+        contract = normalize_contract(item.get("contract"))
         chain = item.get("chain", "ethereum").lower()
         key = f"{chain}:{contract}"
         slug = item.get("slug", "")
@@ -144,12 +143,10 @@ async def check_watched_floor_signals():
         if floor is None or floor <= 0:
             continue
 
-        # Check existing recorded baseline
+        # The chain-qualified checkpoint is the sole signal baseline.
+        # last_floor is kept in the watchlist as a synchronized display/state
+        # field, but is never allowed to override this canonical value.
         prev_floor = checkpoint.get_floor(key)
-        if prev_floor is None:
-            prev_floor = checkpoint.get_floor(contract)
-        if prev_floor is None:
-            prev_floor = item.get("last_floor")
 
         # First floor observation: establish baseline without sending pump/dump signal
         if prev_floor is None or prev_floor <= 0:
@@ -159,8 +156,10 @@ async def check_watched_floor_signals():
             dirty = True
             continue
 
-        # Avoid duplicate alerts caused by polling the same unchanged floor
-        if floor == prev_floor or floor == item.get("current_floor"):
+        # The checkpoint/last_floor baseline is the sole source for signal
+        # comparisons. current_floor is display state and must not suppress a
+        # qualifying move that occurred while its alert cooldown was active.
+        if floor == prev_floor:
             continue
 
         # Calculate percentage movement from baseline
@@ -176,8 +175,18 @@ async def check_watched_floor_signals():
             dirty = True
             continue
 
+        # Respect the existing alert cooldown without changing the persisted
+        # baseline. A later poll can still report the meaningful movement.
+        now = datetime.now(timezone.utc).timestamp()
+        last_alert = floor_last_alerted.get(key, 0)
+        if (now - last_alert) < FLOOR_COOLDOWN_MINUTES * 60:
+            item["current_floor"] = floor
+            dirty = True
+            continue
+
         # Trigger floor signal
         await send_floor_signal(item, prev_floor, floor, direction, image_url)
+        floor_last_alerted[key] = now
 
         # Persist the new baseline floor to survive restart/reload
         checkpoint.set_floor(key, floor, flush_now=True)
