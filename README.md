@@ -70,6 +70,7 @@ AI Legitimacy Audit:
 ## 🛠️ Prerequisites
 
 Before you start, make sure you have:
+
 1. **Python 3.10+** installed on your system.
 2. A **Telegram Bot Token** (Create one via [@BotFather](https://t.me/BotFather) on Telegram).
 3. Your **Telegram Chat ID** (Find it by sending a message to your bot and checking `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates`).
@@ -112,6 +113,7 @@ pip install -r requirements.txt
 You can configure the bot in two ways:
 
 #### Option A: Using Environment Variables (`.env`)
+
 Create a `.env` file in the project root:
 
 ```env
@@ -128,6 +130,7 @@ GEMINI_DAILY_LIMIT=500
 ```
 
 #### Option B: Using a Configuration File (`config.py`)
+
 Modify `config.py` in the root directory, or copy to `private/config_live.py` (which is git-ignored):
 
 ```python
@@ -155,7 +158,7 @@ python bot.py
 ## 🎯 Scoring & Filter Thresholds
 
 | Score Range | Verdict Badge | Outcome |
-|---|---|---|
+| --- | --- | --- |
 | **60 - 100** | ✅ **Looks Legit** | High-confidence launch; alerted with executive summary. |
 | **40 - 59** | ⚠️ **Suspicious / High Risk** | Speculative or unverified project; alerted with risk explanation. |
 | **0 - 39** (or `LIKELY_RUG`) | 🚨 **Likely Rug / Bot Churn** | Automatically blocked from Telegram. |
@@ -169,16 +172,14 @@ python bot.py
 Manage your watchlist directly from Telegram without editing config files:
 
 | Command | Description |
-|---|---|
+| --- | --- |
 | `/start` | Welcome message and list of commands |
-| `/watch <0xContract> [chain]` | Add a contract to percentage-based floor signals |
+| `/watch <0xContract>` | Add a contract to your watchlist |
 | `/unwatch <0xContract>` | Remove a contract from your watchlist |
 | `/list` | Show your active watched collections |
 | `/live` | View the top 10 upcoming Ethereum mints immediately |
 | `/status` | Show the last processed block per chain, how many mints are remembered, and Gemini key quota usage |
 | `/help` | Display command help |
-
-`/watch` signals when the floor moves by `WATCH_FLOOR_CHANGE_PERCENT` (10% by default); its first observed floor establishes the baseline. Arc contracts can be watched, but Arc is not indexed by the configured OpenSea floor provider and this project has no Arc floor fallback, so Arc floor values and floor signals are omitted until a supported provider is added.
 
 ---
 
@@ -220,4 +221,3 @@ Manage your watchlist directly from Telegram without editing config files:
 ## 📄 License
 
 This project is licensed under the MIT License. Feel free to fork, modify, and build on top of it!
-
