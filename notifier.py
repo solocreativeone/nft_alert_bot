@@ -276,6 +276,12 @@ async def asend_photo(photo, caption=None, parse_mode=None, reply_markup=None):
     if caption and len(caption) > 1024:
         caption = caption[:1020] + "..."
     for chat_id in CHAT_IDS:
+        # Rewind the stream before each send — BytesIO gets consumed after
+        # the first send, so without this, only the first recipient in
+        # CHAT_IDS gets the actual image; subsequent recipients get an
+        # empty/failed send.
+        if hasattr(photo, "seek"):
+            photo.seek(0)
         await get_bot().send_photo(
             chat_id=chat_id,
             photo=photo,
