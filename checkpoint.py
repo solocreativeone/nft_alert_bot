@@ -42,7 +42,7 @@ import signal
 import time
 from collections import deque
 
-VERSION = 1
+VERSION = 2
 
 STATE_FILE = os.environ.get(
     "NFT_BOT_STATE_FILE",
@@ -63,6 +63,7 @@ SEEN_LIMITS = {
     "calendar_links": 5000,
 }
 DEFAULT_SEEN_LIMIT = 2000
+ALERT_HISTORY_LIMIT = 10000
 
 _state = None
 _seen_order = {}   # section -> deque preserving insertion order for eviction
@@ -72,7 +73,7 @@ _hooks_installed = False
 
 
 def _empty_state():
-    return {"version": VERSION, "blocks": {}, "signatures": {}, "seen": {}, "gemini": {}, "floors": {}}
+    return {"version": VERSION, "blocks": {}, "signatures": {}, "seen": {}, "gemini": {}, "floors": {}, "alerts": []}
 
 
 def _coerce(raw):
@@ -129,6 +130,10 @@ def _coerce(raw):
                 }
             except (TypeError, ValueError):
                 continue
+
+    alerts = raw.get("alerts")
+    if isinstance(alerts, list):
+        state["alerts"] = [item for item in alerts if isinstance(item, dict)][-ALERT_HISTORY_LIMIT:]
 
     return state
 
@@ -385,6 +390,38 @@ def delete_floor(key: str, flush_now: bool = False):
         del state["floors"][str(key)]
         _mark_dirty()
         flush(force=flush_now)
+
+
+# ── Structured alert history ─────────────────────────────────────────────────
+
+def append_alert(record: dict, flush_now: bool = True):
+    """Persist one successfully delivered, structured user-facing alert."""
+    if not isinstance(record, dict):
+        return
+    state = load()
+    state.setdefault("alerts", []).append(dict(record))
+    state["alerts"] = state["alerts"][-ALERT_HISTORY_LIMIT:]
+    _mark_dirty()
+    flush(force=flush_now)
+
+
+def get_alerts() -> list[dict]:
+    """Return a copy of persisted alert records in insertion order."""
+    return [dict(item) for item in load().get("alerts", []) if isinstance(item, dict)]
+
+
+def update_alerts(matcher, updater, flush_now: bool = True) -> int:
+    """Update matching alert records; returns the number changed."""
+    state = load()
+    changed = 0
+    for item in state.get("alerts", []):
+        if matcher(item):
+            updater(item)
+            changed += 1
+    if changed:
+        _mark_dirty()
+        flush(force=flush_now)
+    return changed
 
 
 # ── Test / maintenance helpers ───────────────────────────────────────────────
