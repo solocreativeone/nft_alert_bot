@@ -4,6 +4,8 @@ Only fields documented by the providers are normalized here. Missing provider
 fields remain unknown rather than being guessed.
 """
 import requests
+import hashlib
+import time
 
 from watchlist import normalize_contract
 
@@ -54,15 +56,42 @@ class HoneypotProvider:
 class GoPlusProvider:
     name = "GoPlus"
 
-    def __init__(self, api_key="", http_get=requests.get):
+    def __init__(self, api_key="", app_key="", app_secret="", http_get=requests.get, http_post=requests.post):
         self.api_key = api_key
+        self.app_key = app_key
+        self.app_secret = app_secret
         self.http_get = http_get
+        self.http_post = http_post
+
+    def _access_token(self):
+        if not self.app_key or not self.app_secret:
+            return self.api_key or ""
+        timestamp = str(int(time.time()))
+        signature = hashlib.sha1((self.app_key + timestamp + self.app_secret).encode()).hexdigest()
+        response = self.http_post(
+            "https://api.gopluslabs.io/api/v1/token",
+            json={"app_key": self.app_key, "sign": signature, "time": int(timestamp)},
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        result = payload.get("result") if isinstance(payload, dict) else None
+        token = result if isinstance(result, str) else None
+        if isinstance(result, dict):
+            token = result.get("access_token") or result.get("token")
+        token = token or (payload.get("access_token") if isinstance(payload, dict) else None)
+        if not token:
+            raise RuntimeError("GoPlus token response did not contain an access token")
+        # GoPlus may return the scheme together with the token. The request
+        # layer adds the Bearer scheme, so avoid sending "Bearer Bearer ...".
+        return token[7:].strip() if token.lower().startswith("bearer ") else token
 
     def inspect(self, contract, chain, chain_id):
+        token = self._access_token()
         response = self.http_get(
             f"https://api.gopluslabs.io/api/v1/token_security/{chain_id}",
             params={"contract_addresses": contract},
-            headers=_headers(self.api_key, bearer=True), timeout=15,
+            headers=_headers(token, bearer=True), timeout=15,
         )
         response.raise_for_status()
         return response.json()
@@ -134,7 +163,7 @@ def normalize_result(contract, chain, provider_name, raw):
     return {"contract": contract, "chain": chain, "risk": risk, "flags": flags, "details": details}
 
 
-def inspect_contract(contract, chain="ethereum", honeypot_key="", goplus_key="", http_get=requests.get):
+def inspect_contract(contract, chain="ethereum", honeypot_key="", goplus_key="", app_key="", app_secret="", http_get=requests.get, http_post=requests.post):
     chain, chain_id = resolve_chain(chain)
     contract = normalize_contract(contract)
     if not (len(contract) == 42 and contract.startswith("0x") and all(c in "0123456789abcdef" for c in contract[2:])):
@@ -142,6 +171,6 @@ def inspect_contract(contract, chain="ethereum", honeypot_key="", goplus_key="",
     if chain in HONEYPOT_SUPPORTED:
         provider = HoneypotProvider(honeypot_key, http_get=http_get)
     else:
-        provider = GoPlusProvider(goplus_key, http_get=http_get)
+        provider = GoPlusProvider(goplus_key, app_key, app_secret, http_get=http_get, http_post=http_post)
     raw = provider.inspect(contract, chain, chain_id)
     return normalize_result(contract, chain, provider.name, raw)
