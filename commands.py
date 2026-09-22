@@ -32,9 +32,9 @@ try:
 except ImportError:
     from config import WATCH_FLOOR_CHANGE_PERCENT
 try:
-    from private.config_live import HONEYPOT_API_KEY, GOPLUS_API_KEY
+    from private.config_live import HONEYPOT_API_KEY, GOPLUS_API_KEY, GOPLUS_APP_KEY, GOPLUS_APP_SECRET
 except ImportError:
-    from config import HONEYPOT_API_KEY, GOPLUS_API_KEY
+    from config import HONEYPOT_API_KEY, GOPLUS_API_KEY, GOPLUS_APP_KEY, GOPLUS_APP_SECRET
 
 # Valid Ethereum address pattern
 ETH_ADDRESS_PATTERN = re.compile(r'^0x[a-fA-F0-9]{40}$')
@@ -448,7 +448,8 @@ async def inspect_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔎 Inspecting contract security…")
     try:
         result = await asyncio.to_thread(
-            inspect_security_contract, contract, chain, HONEYPOT_API_KEY, GOPLUS_API_KEY
+            inspect_security_contract, contract, chain, HONEYPOT_API_KEY, GOPLUS_API_KEY,
+            GOPLUS_APP_KEY, GOPLUS_APP_SECRET,
         )
     except ValueError as exc:
         await update.message.reply_text(f"❌ {exc}")
