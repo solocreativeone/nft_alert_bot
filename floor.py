@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from watchlist import merge_with_config, get_watchlist, save_watchlist, get_collection_url, normalize_contract
 from notifier import asend, asend_photo, download_image_bytes, escape_html
+from alert_history import record_alert
 import checkpoint
 
 try:
@@ -116,6 +117,11 @@ async def send_floor_signal(col, prev_floor, current_floor, direction, image_url
 
     if not sent:
         await asend(text, reply_markup=reply_markup)
+
+    record_alert(
+        "floor_signal", col, prev_floor, current_floor, change_pct,
+        context={"direction": direction},
+    )
 
 
 async def check_watched_floor_signals():
@@ -247,6 +253,11 @@ async def send_floor_alert(col, floor, direction, image_url):
 
     if not sent:
         await asend(text, reply_markup=reply_markup, disable_notification=disable_notification)
+
+    record_alert(
+        "floor_target", col, current_floor=floor,
+        context={"direction": direction, "threshold": col.get("floor_alert_low") if direction == "low" else col.get("floor_alert_high")},
+    )
 
 
 async def check_floors():
