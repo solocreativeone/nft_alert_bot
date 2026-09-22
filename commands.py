@@ -1,17 +1,27 @@
 import asyncio
 import functools
 import inspect
+import io
 import os
 import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from watchlist import add_to_watchlist, remove_from_watchlist, get_watchlist, get_collection_url
+from watchlist import add_to_watchlist, remove_from_watchlist, get_watchlist, get_collection_url, normalize_contract
 from price_utils import (
     shorten_address,
     get_eth_usd_price,
     format_floor_display,
 )
 from notifier import escape_html
+from alert_history import (
+    RISK_LABELS,
+    can_export,
+    export_alert_history_csv,
+    export_alert_history_json,
+    query_alert_history,
+    summarize_alert_history,
+)
+from security import inspect_contract as inspect_security_contract
 
 try:
     from private.config_live import TELEGRAM_TOKEN, CHAT_ID
@@ -21,6 +31,10 @@ try:
     from private.config_live import WATCH_FLOOR_CHANGE_PERCENT
 except ImportError:
     from config import WATCH_FLOOR_CHANGE_PERCENT
+try:
+    from private.config_live import HONEYPOT_API_KEY, GOPLUS_API_KEY
+except ImportError:
+    from config import HONEYPOT_API_KEY, GOPLUS_API_KEY
 
 # Valid Ethereum address pattern
 ETH_ADDRESS_PATTERN = re.compile(r'^0x[a-fA-F0-9]{40}$')
@@ -177,6 +191,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  Example: /watch 0xABC... polygon\n\n"
         "/unwatch 0xContract : Remove a collection\n"
         "/list : Show your watchlist\n"
+        "/inspect 0xContract [chain] : Inspect contract security\n"
+        "/sum [6h|24h|yesterday] : Summarize alert history\n"
+        "/export [period] [csv|json] : Export alert history\n"
         "/live [chain] : Check upcoming mints\n"
         "  Default chain: ethereum\n"
         "  Example: /live polygon\n"
@@ -392,6 +409,115 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+def _format_inspection(result, collection_name=None):
+    details = result.get("details", {})
+    token = details.get("token", {})
+    name = collection_name or token.get("name") or "Unknown"
+    risk = result.get("risk", "not_assessed")
+    risk_text = RISK_LABELS.get(risk, RISK_LABELS["not_assessed"])
+    lines = [
+        "🔎 Contract Inspection", "",
+        f"Collection: {name}",
+        f"Chain: {result['chain'].capitalize()}",
+        f"Contract: {shorten_address(result['contract'])}", "",
+        f"Risk: {risk_text}", "", "Security",
+    ]
+    if "verified" in details:
+        lines.append(f"• Verified: {'Yes' if details['verified'] is True else 'No' if details['verified'] is False else 'Unknown'}")
+    if "proxy" in details:
+        lines.append(f"• Proxy: {'Yes' if details['proxy'] is True else 'No' if details['proxy'] is False else 'Unknown'}")
+    if "honeypot" in details:
+        value = details["honeypot"]
+        lines.append(f"• Honeypot indicators: {'Detected' if value is True else 'None detected' if value is False else 'Unknown'}")
+    if result.get("flags"):
+        lines.append("• Flags: " + ", ".join(str(flag) for flag in result["flags"]))
+    lines += ["", "⚠️ Automated assessment. Not a guarantee of safety."]
+    return "\n".join(lines)
+
+
+@auto_cleanup
+async def inspect_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Usage: /inspect 0xContract [chain]")
+        return
+    contract = context.args[0].strip()
+    chain = context.args[1].strip().lower() if len(context.args) > 1 else "ethereum"
+    if not ETH_ADDRESS_PATTERN.fullmatch(contract):
+        await update.message.reply_text("❌ Invalid contract address.")
+        return
+    await update.message.reply_text("🔎 Inspecting contract security…")
+    try:
+        result = await asyncio.to_thread(
+            inspect_security_contract, contract, chain, HONEYPOT_API_KEY, GOPLUS_API_KEY
+        )
+    except ValueError as exc:
+        await update.message.reply_text(f"❌ {exc}")
+        return
+    except Exception:
+        await update.message.reply_text("⚠️ Security provider unavailable. Try again later.")
+        return
+
+    collection_name = None
+    for item in get_watchlist():
+        if normalize_contract(item.get("contract")) == result["contract"] and item.get("chain", "ethereum").lower() == result["chain"]:
+            collection_name = item.get("name")
+            break
+    import checkpoint
+    checkpoint.update_alerts(
+        lambda item: normalize_contract(item.get("contract")) == result["contract"] and item.get("chain", "ethereum").lower() == result["chain"],
+        lambda item: item.update({"risk_status": result["risk"], "risk_reasons": result.get("flags", []), "risk_details": result.get("details", {})}),
+    )
+    await update.message.reply_text(_format_inspection(result, collection_name=collection_name))
+
+
+def _format_summary(records, period):
+    if not records:
+        return "📊 No alerts found for this period."
+    groups = summarize_alert_history(records)
+    lines = ["📊 Alert Summary", f"Last {period}", ""]
+    number = 1
+    for status in ("looks_legit", "suspicious", "high_risk", "not_assessed"):
+        items = groups[status]
+        if not items:
+            continue
+        lines.append(f"{RISK_LABELS[status]} ({len(items)})")
+        for item in items:
+            change = item.get("change_percent")
+            movement = f"{float(change):+.1f}%" if change is not None else item.get("type", "alert")
+            prev, current = item.get("previous_floor"), item.get("current_floor")
+            floor_text = f" • {prev:g} → {current:g} ETH" if isinstance(prev, (int, float)) and isinstance(current, (int, float)) else ""
+            lines.append(f"{number}. {item.get('collection', 'Unknown')}\n   {movement}{floor_text}\n   {str(item.get('chain', 'ethereum')).capitalize()}")
+            number += 1
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+@auto_cleanup
+async def sum_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    period = context.args[0].strip().lower() if context.args else "24h"
+    records = query_alert_history(period)
+    await update.message.reply_text(_format_summary(records, period))
+
+
+@auto_cleanup
+async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not can_export(update.effective_chat.id):
+        await update.message.reply_text("❌ Export is not available for this account.")
+        return
+    period = "all"
+    fmt = "csv"
+    for arg in context.args or []:
+        value = arg.strip().lower()
+        if value in ("csv", "json"):
+            fmt = value
+        else:
+            period = value
+    records = query_alert_history(period)
+    payload = export_alert_history_csv(records) if fmt == "csv" else export_alert_history_json(records)
+    filename = f"nftpulse-alerts-{period}.{fmt}"
+    await update.message.reply_document(document=io.BytesIO(payload), filename=filename, caption=f"📤 Alert history ({period})")
+
+
 async def watch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /watch callback button click from alert messages."""
     query = update.callback_query
@@ -544,6 +670,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/watch 0xContract - add a collection to watchlist\n"
         "/unwatch 0xContract - remove a collection\n"
         "/list - show all watched collections\n"
+        "/inspect 0xContract [chain] - inspect contract security\n"
+        "/sum [6h|24h|yesterday] - summarize alert history\n"
+        "/export [period] [csv|json] - export alert history\n"
         "/live - check live & upcoming mints now\n"
         "/help - show this message"
     )
@@ -573,6 +702,9 @@ def build_app():
     app.add_handler(
         CommandHandler("list", list_command)
     )
+    app.add_handler(CommandHandler("inspect", inspect_command))
+    app.add_handler(CommandHandler("sum", sum_command))
+    app.add_handler(CommandHandler("export", export_command))
     app.add_handler(
         CommandHandler("live", live_command)
     )
