@@ -8,6 +8,8 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 OPENSEA_API_KEY = os.environ.get("OPENSEA_API_KEY")
 GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY")
+HONEYPOT_API_KEY = os.environ.get("HONEYPOT_API_KEY")
+GOPLUS_API_KEY = os.environ.get("GOPLUS_API_KEY")
 
 # Arc EVM RPC endpoint (Chain ID 5042). Configurable via ARC_RPC_URL or ARC_RPC.
 ARC_RPC_URL = os.environ.get("ARC_RPC_URL") or os.environ.get("ARC_RPC", "https://rpc.mainnet.arc.io")
