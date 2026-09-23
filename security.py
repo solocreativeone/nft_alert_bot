@@ -10,8 +10,11 @@ import time
 from watchlist import normalize_contract
 
 HONEYPOT_SUPPORTED = {"ethereum": 1, "bsc": 56, "base": 8453}
+GOPLUS_SUPPORTED = {"ethereum": 1, "polygon": 137, "base": 8453, "arbitrum": 42161,
+                    "optimism": 10, "bsc": 56, "avalanche": 43114}
 CHAIN_IDS = {"ethereum": 1, "polygon": 137, "base": 8453, "arbitrum": 42161,
              "optimism": 10, "bsc": 56, "avalanche": 43114, "robinhood": 4663, "arc": 5042}
+SECURITY_SUPPORTED_CHAINS = set(HONEYPOT_SUPPORTED) | set(GOPLUS_SUPPORTED)
 
 
 def resolve_chain(chain):
@@ -49,6 +52,16 @@ class HoneypotProvider:
             params={"address": contract, "chainID": chain_id},
             headers=_headers(self.api_key), timeout=15,
         )
+        status_code = getattr(response, "status_code", getattr(response, "status", 200))
+        if status_code == 400:
+            try:
+                body = response.json()
+                if "invalid chain" in str(body.get("error", "")).lower():
+                    return {"unsupported_chain": True, "raw": body}
+            except Exception:
+                pass
+        if status_code == 404:
+            return {"empty_response": True, "raw": {}}
         response.raise_for_status()
         return response.json()
 
@@ -94,13 +107,20 @@ class GoPlusProvider:
             headers=_headers(token, bearer=True), timeout=15,
         )
         response.raise_for_status()
-        return response.json()
+        payload = response.json()
+        if isinstance(payload, dict):
+            code = payload.get("code")
+            if code == 2022 or (isinstance(payload.get("message"), str) and "not supported" in payload.get("message").lower()):
+                return {"unsupported_chain": True, "raw": payload}
+            if code not in (1, None) and not payload.get("result"):
+                raise RuntimeError(f"GoPlus error: {payload.get('message') or code}")
+        return payload
 
 
 def _goplus_result(raw, contract):
     result = raw.get("result", raw) if isinstance(raw, dict) else {}
     if isinstance(result, dict):
-        return result.get(contract) or result.get(contract.lower()) or result.get(contract.upper()) or result
+        return result.get(contract) or result.get(contract.lower()) or result.get(contract.upper()) or {}
     return {}
 
 
@@ -137,8 +157,26 @@ def _risk_from_goplus(data):
 
 def normalize_result(contract, chain, provider_name, raw):
     contract = normalize_contract(contract)
+    if isinstance(raw, dict) and raw.get("unsupported_chain"):
+        return {
+            "contract": contract,
+            "chain": chain,
+            "risk": "not_assessed",
+            "flags": [],
+            "details": {"provider": provider_name, "unsupported_chain": True},
+            "unsupported_chain": True,
+        }
     details = {"provider": provider_name}
     if provider_name == "Honeypot.is":
+        if isinstance(raw, dict) and raw.get("empty_response"):
+            return {
+                "contract": contract,
+                "chain": chain,
+                "risk": "not_assessed",
+                "flags": [],
+                "details": {"provider": provider_name, "empty_response": True},
+                "empty_response": True,
+            }
         token = raw.get("token") or {}
         summary = raw.get("summary") or {}
         code = raw.get("contractCode") or {}
@@ -155,11 +193,36 @@ def normalize_result(contract, chain, provider_name, raw):
         })
     else:
         data = _goplus_result(raw, contract)
+        if not data:
+            return {
+                "contract": contract,
+                "chain": chain,
+                "risk": "not_assessed",
+                "flags": [],
+                "details": {"provider": provider_name, "empty_response": True},
+                "empty_response": True,
+            }
         risk, flags = _risk_from_goplus(data)
         details.update({key: data[key] for key in (
             "token_name", "token_symbol", "is_open_source", "is_proxy", "is_honeypot",
             "is_mintable", "is_blacklisted", "transfer_pausable", "dex",
         ) if key in data})
+        token_info = {}
+        if "token_name" in data:
+            token_info["name"] = data["token_name"]
+        if "token_symbol" in data:
+            token_info["symbol"] = data["token_symbol"]
+        if token_info:
+            details["token"] = token_info
+        if "is_open_source" in data:
+            val = str(data["is_open_source"])
+            details["verified"] = True if val == "1" else (False if val == "0" else None)
+        if "is_proxy" in data:
+            val = str(data["is_proxy"])
+            details["proxy"] = True if val == "1" else (False if val == "0" else None)
+        if "is_honeypot" in data:
+            val = str(data["is_honeypot"])
+            details["honeypot"] = True if val == "1" else (False if val == "0" else None)
     return {"contract": contract, "chain": chain, "risk": risk, "flags": flags, "details": details}
 
 
@@ -168,6 +231,15 @@ def inspect_contract(contract, chain="ethereum", honeypot_key="", goplus_key="",
     contract = normalize_contract(contract)
     if not (len(contract) == 42 and contract.startswith("0x") and all(c in "0123456789abcdef" for c in contract[2:])):
         raise ValueError("Invalid contract address")
+    if chain not in SECURITY_SUPPORTED_CHAINS:
+        return {
+            "contract": contract,
+            "chain": chain,
+            "risk": "not_assessed",
+            "flags": [],
+            "details": {"unsupported_chain": True},
+            "unsupported_chain": True,
+        }
     if chain in HONEYPOT_SUPPORTED:
         provider = HoneypotProvider(honeypot_key, http_get=http_get)
     else:
