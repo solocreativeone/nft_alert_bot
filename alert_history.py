@@ -95,6 +95,52 @@ def summarize_alert_history(records):
     return groups
 
 
+def aggregate_alert_history(records):
+    """Aggregate alert events by unique collection within risk statuses."""
+    col_records = {}
+    for record in records:
+        chain = (record.get("chain") or "ethereum").lower()
+        contract = record.get("contract")
+        contract_key = contract.lower() if contract else None
+        name = record.get("collection") or "Unknown"
+        key = (chain, contract_key if contract_key else name.lower())
+        if key not in col_records:
+            col_records[key] = []
+        col_records[key].append(record)
+
+    groups = {status: [] for status in RISK_STATUSES}
+    for key, items in col_records.items():
+        latest = items[-1]
+        chain = items[-1].get("chain") or "ethereum"
+        name = items[-1].get("collection") or "Unknown"
+        contract = items[-1].get("contract")
+        status = normalize_risk_status(items[-1].get("risk_status"))
+
+        changes = [float(r["change_percent"]) for r in items if r.get("change_percent") is not None]
+        floors = [r["current_floor"] for r in items if isinstance(r.get("current_floor"), (int, float))]
+        prev_floors = [r["previous_floor"] for r in items if isinstance(r.get("previous_floor"), (int, float))]
+
+        col_data = {
+            "collection": name,
+            "chain": chain,
+            "contract": contract,
+            "risk_status": status,
+            "signal_count": len(items),
+            "min_change": min(changes) if changes else None,
+            "max_change": max(changes) if changes else None,
+            "single_change": changes[0] if len(changes) == 1 else None,
+            "current_floor": floors[-1] if floors else None,
+            "previous_floor": prev_floors[0] if prev_floors else None,
+            "type": latest.get("type", "alert"),
+        }
+        groups[status].append(col_data)
+
+    for status in RISK_STATUSES:
+        groups[status].sort(key=lambda x: x["signal_count"], reverse=True)
+
+    return groups
+
+
 def export_alert_history_csv(records):
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=EXPORT_FIELDS, extrasaction="ignore")
