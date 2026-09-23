@@ -415,24 +415,62 @@ def _format_inspection(result, collection_name=None):
     name = collection_name or token.get("name") or "Unknown"
     risk = result.get("risk", "not_assessed")
     risk_text = RISK_LABELS.get(risk, RISK_LABELS["not_assessed"])
+    chain_display = result["chain"].capitalize()
+
+    if result.get("unsupported_chain") or details.get("unsupported_chain"):
+        return "\n".join([
+            "🔎 Contract Inspection", "",
+            f"Collection: {name}",
+            f"Chain: {chain_display}",
+            f"Contract: {shorten_address(result['contract'])}", "",
+            f"Risk: {risk_text}", "",
+            "Provider:",
+            f"• Security provider does not currently support {chain_display}.",
+        ])
+
     lines = [
         "🔎 Contract Inspection", "",
         f"Collection: {name}",
-        f"Chain: {result['chain'].capitalize()}",
+        f"Chain: {chain_display}",
         f"Contract: {shorten_address(result['contract'])}", "",
-        f"Risk: {risk_text}", "", "Security",
+        f"Risk: {risk_text}", "",
     ]
-    if "verified" in details:
-        lines.append(f"• Verified: {'Yes' if details['verified'] is True else 'No' if details['verified'] is False else 'Unknown'}")
-    if "proxy" in details:
-        lines.append(f"• Proxy: {'Yes' if details['proxy'] is True else 'No' if details['proxy'] is False else 'Unknown'}")
-    if "honeypot" in details:
+
+    security_lines = []
+    if "verified" in details and details["verified"] is not None:
+        security_lines.append(f"• Verified: {'Yes' if details['verified'] is True else 'No' if details['verified'] is False else 'Unknown'}")
+    if "proxy" in details and details["proxy"] is not None:
+        security_lines.append(f"• Proxy: {'Yes' if details['proxy'] is True else 'No' if details['proxy'] is False else 'Unknown'}")
+    if "honeypot" in details and details["honeypot"] is not None:
         value = details["honeypot"]
-        lines.append(f"• Honeypot indicators: {'Detected' if value is True else 'None detected' if value is False else 'Unknown'}")
+        security_lines.append(f"• Honeypot indicators: {'Detected' if value is True else 'None detected' if value is False else 'Unknown'}")
     if result.get("flags"):
-        lines.append("• Flags: " + ", ".join(str(flag) for flag in result["flags"]))
+        security_lines.append("• Flags: " + ", ".join(str(flag) for flag in result["flags"]))
+
+    if security_lines:
+        lines.append("Security")
+        lines.extend(security_lines)
+    else:
+        lines.append("Provider:")
+        lines.append("• No security assessment data available for this contract.")
+
     lines += ["", "⚠️ Automated assessment. Not a guarantee of safety."]
     return "\n".join(lines)
+
+
+async def _send_or_edit(status_msg, update, text):
+    if status_msg is not None:
+        edit_fn = getattr(status_msg, "edit_text", None)
+        if callable(edit_fn):
+            try:
+                res = edit_fn(text)
+                if inspect.isawaitable(res):
+                    await res
+                return status_msg
+            except Exception:
+                pass
+        await safe_delete_message(status_msg)
+    return await update.message.reply_text(text)
 
 
 @auto_cleanup
@@ -445,17 +483,19 @@ async def inspect_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not ETH_ADDRESS_PATTERN.fullmatch(contract):
         await update.message.reply_text("❌ Invalid contract address.")
         return
-    await update.message.reply_text("🔎 Inspecting contract security…")
+    status_msg = await update.message.reply_text("🔎 Inspecting contract security…")
     try:
         result = await asyncio.to_thread(
             inspect_security_contract, contract, chain, HONEYPOT_API_KEY, GOPLUS_API_KEY,
             GOPLUS_APP_KEY, GOPLUS_APP_SECRET,
         )
     except ValueError as exc:
-        await update.message.reply_text(f"❌ {exc}")
+        await _send_or_edit(status_msg, update, f"❌ {exc}")
         return
     except Exception:
-        await update.message.reply_text("⚠️ Security provider unavailable. Try again later.")
+        await _send_or_edit(
+            status_msg, update, "⚠️ Security provider unavailable.\nPlease try again later."
+        )
         return
 
     collection_name = None
@@ -468,7 +508,7 @@ async def inspect_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lambda item: normalize_contract(item.get("contract")) == result["contract"] and item.get("chain", "ethereum").lower() == result["chain"],
         lambda item: item.update({"risk_status": result["risk"], "risk_reasons": result.get("flags", []), "risk_details": result.get("details", {})}),
     )
-    await update.message.reply_text(_format_inspection(result, collection_name=collection_name))
+    await _send_or_edit(status_msg, update, _format_inspection(result, collection_name=collection_name))
 
 
 def _format_summary(records, period):
