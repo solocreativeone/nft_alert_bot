@@ -167,3 +167,123 @@ def test_unwatch_callback_valid(monkeypatch):
     asyncio.run(commands.unwatch_callback(update, None))
     assert query.answered
     assert "Removed 0x1234...7890" in query.message.sent[0]
+
+
+# ── Inspect command tests ───────────────────────────────────────────────────
+
+def test_inspect_command_unsupported_chain_arc(monkeypatch):
+    monkeypatch.setattr(commands, "CHAT_ID", "123")
+    contract = "0x" + "a" * 40
+    update, msg = _fake_update("123")
+    ctx = types.SimpleNamespace(args=[contract, "arc"])
+
+    asyncio.run(commands.inspect_command(update, ctx))
+
+    assert len(msg.sent) == 2
+    assert "🔎 Inspecting contract security…" in msg.sent[0]
+    result_text = msg.sent[1]
+    assert "🔎 Contract Inspection" in result_text
+    assert "Chain: Arc" in result_text
+    assert "Risk: ⚪ Not Assessed" in result_text
+    assert "Provider:\n• Security provider does not currently support Arc." in result_text
+    assert "Automated assessment. Not a guarantee of safety." not in result_text
+
+
+def test_inspect_command_unsupported_chain_robinhood(monkeypatch):
+    monkeypatch.setattr(commands, "CHAT_ID", "123")
+    contract = "0x" + "a" * 40
+    update, msg = _fake_update("123")
+    ctx = types.SimpleNamespace(args=[contract, "robinhood"])
+
+    asyncio.run(commands.inspect_command(update, ctx))
+
+    result_text = msg.sent[1]
+    assert "Chain: Robinhood" in result_text
+    assert "Risk: ⚪ Not Assessed" in result_text
+    assert "Provider:\n• Security provider does not currently support Robinhood." in result_text
+    assert "Automated assessment. Not a guarantee of safety." not in result_text
+
+
+def test_inspect_command_supported_chain_valid_response(monkeypatch):
+    monkeypatch.setattr(commands, "CHAT_ID", "123")
+    contract = "0x" + "b" * 40
+    update, msg = _fake_update("123")
+    ctx = types.SimpleNamespace(args=[contract, "arbitrum"])
+
+    fake_result = {
+        "contract": contract.lower(),
+        "chain": "arbitrum",
+        "risk": "looks_legit",
+        "flags": [],
+        "details": {
+            "token": {"name": "TestToken", "symbol": "TT"},
+            "verified": True,
+            "proxy": False,
+            "honeypot": False,
+        }
+    }
+    monkeypatch.setattr(commands, "inspect_security_contract", lambda *args, **kwargs: fake_result)
+
+    asyncio.run(commands.inspect_command(update, ctx))
+
+    result_text = msg.sent[1]
+    assert "Collection: TestToken" in result_text
+    assert "Chain: Arbitrum" in result_text
+    assert "Risk: 🟢 Looks Legit" in result_text
+    assert "• Verified: Yes" in result_text
+    assert "• Proxy: No" in result_text
+    assert "• Honeypot indicators: None detected" in result_text
+    assert "⚠️ Automated assessment. Not a guarantee of safety." in result_text
+
+
+def test_inspect_command_provider_failure(monkeypatch):
+    monkeypatch.setattr(commands, "CHAT_ID", "123")
+    contract = "0x" + "c" * 40
+    update, msg = _fake_update("123")
+    ctx = types.SimpleNamespace(args=[contract, "ethereum"])
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("API timeout")
+
+    monkeypatch.setattr(commands, "inspect_security_contract", fail)
+
+    asyncio.run(commands.inspect_command(update, ctx))
+
+    result_text = msg.sent[1]
+    assert "⚠️ Security provider unavailable.\nPlease try again later." in result_text
+
+
+def test_inspect_command_replaces_temporary_message(monkeypatch):
+    monkeypatch.setattr(commands, "CHAT_ID", "123")
+    contract = "0x" + "d" * 40
+
+    class MockStatusMsg:
+        def __init__(self):
+            self.text = "🔎 Inspecting contract security…"
+
+        async def edit_text(self, text, **kwargs):
+            self.text = text
+
+    class MockUserMsg:
+        def __init__(self):
+            self.status_msg = MockStatusMsg()
+            self.sent_count = 0
+
+        async def reply_text(self, text, **kwargs):
+            self.sent_count += 1
+            return self.status_msg
+
+    mock_msg = MockUserMsg()
+    update = types.SimpleNamespace(
+        effective_chat=types.SimpleNamespace(id="123"),
+        message=mock_msg,
+    )
+    ctx = types.SimpleNamespace(args=[contract, "arc"])
+
+    asyncio.run(commands.inspect_command(update, ctx))
+
+    # The temporary message was edited in place, avoiding duplicate messages
+    assert mock_msg.sent_count == 1
+    assert "🔎 Contract Inspection" in mock_msg.status_msg.text
+    assert "Security provider does not currently support Arc." in mock_msg.status_msg.text
+
