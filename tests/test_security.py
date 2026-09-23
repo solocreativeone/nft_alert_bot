@@ -64,3 +64,79 @@ def test_invalid_contract_and_provider_failure():
         pass
     else:
         raise AssertionError("provider failure was hidden from the command layer")
+
+
+def test_inspect_unsupported_chains_arc_and_robinhood():
+    result_arc = security.inspect_contract(CONTRACT, "arc")
+    assert result_arc["unsupported_chain"] is True
+    assert result_arc["risk"] == "not_assessed"
+    assert result_arc["chain"] == "arc"
+
+    result_rh = security.inspect_contract(CONTRACT, "robinhood")
+    assert result_rh["unsupported_chain"] is True
+    assert result_rh["risk"] == "not_assessed"
+    assert result_rh["chain"] == "robinhood"
+
+
+def test_inspect_goplus_normalizes_fields_and_evidence():
+    def get(url, **kwargs):
+        return Response({
+            "code": 1,
+            "message": "OK",
+            "result": {
+                CONTRACT: {
+                    "token_name": "TestToken",
+                    "token_symbol": "TT",
+                    "is_open_source": "1",
+                    "is_proxy": "0",
+                    "is_honeypot": "0",
+                }
+            }
+        })
+
+    result = security.inspect_contract(CONTRACT, "arbitrum", "honey", "key", http_get=get)
+    assert result["risk"] == "looks_legit"
+    assert result["details"]["token"]["name"] == "TestToken"
+    assert result["details"]["verified"] is True
+    assert result["details"]["proxy"] is False
+    assert result["details"]["honeypot"] is False
+
+
+def test_inspect_empty_provider_response():
+    # GoPlus returns empty dict when contract is not indexed
+    def get_goplus(url, **kwargs):
+        return Response({"code": 1, "message": "OK", "result": {}})
+
+    result = security.inspect_contract(CONTRACT, "arbitrum", "honey", "key", http_get=get_goplus)
+    assert result["risk"] == "not_assessed"
+    assert result["details"]["empty_response"] is True
+
+    # Honeypot returns 404 when pair not found
+    def get_honeypot(url, **kwargs):
+        return Response({"code": 404, "error": "Token not found"}, status=404)
+
+    res_hp = security.inspect_contract(CONTRACT, "base", "honey", "key", http_get=get_honeypot)
+    assert res_hp["risk"] == "not_assessed"
+    assert res_hp["details"]["empty_response"] is True
+
+
+def test_inspect_goplus_system_error_raises_runtime_error():
+    def get(url, **kwargs):
+        return Response({"code": 5000, "message": "system error", "result": None})
+
+    try:
+        security.inspect_contract(CONTRACT, "arbitrum", "honey", "key", http_get=get)
+    except RuntimeError as exc:
+        assert "system error" in str(exc)
+    else:
+        raise AssertionError("GoPlus system error did not raise RuntimeError")
+
+
+def test_inspect_dynamic_unsupported_chain_response():
+    def get(url, **kwargs):
+        return Response({"code": 2022, "message": "The main chain is not supported", "result": None})
+
+    result = security.inspect_contract(CONTRACT, "arbitrum", "honey", "key", http_get=get)
+    assert result["unsupported_chain"] is True
+    assert result["risk"] == "not_assessed"
+
