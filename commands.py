@@ -15,6 +15,7 @@ from price_utils import (
 from notifier import escape_html
 from alert_history import (
     RISK_LABELS,
+    aggregate_alert_history,
     can_export,
     export_alert_history_csv,
     export_alert_history_json,
@@ -514,22 +515,44 @@ async def inspect_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def _format_summary(records, period):
     if not records:
         return "📊 No alerts found for this period."
-    groups = summarize_alert_history(records)
+    groups = aggregate_alert_history(records)
     lines = ["📊 Alert Summary", f"Last {period}", ""]
     number = 1
     for status in ("looks_legit", "suspicious", "high_risk", "not_assessed"):
         items = groups[status]
         if not items:
             continue
-        lines.append(f"{RISK_LABELS[status]} ({len(items)})")
-        for item in items:
-            change = item.get("change_percent")
-            movement = f"{float(change):+.1f}%" if change is not None else item.get("type", "alert")
-            prev, current = item.get("previous_floor"), item.get("current_floor")
-            floor_text = f" • {prev:g} → {current:g} ETH" if isinstance(prev, (int, float)) and isinstance(current, (int, float)) else ""
-            lines.append(f"{number}. {item.get('collection', 'Unknown')}\n   {movement}{floor_text}\n   {str(item.get('chain', 'ethereum')).capitalize()}")
-            number += 1
+        num_cols = len(items)
+        col_word = "collection" if num_cols == 1 else "collections"
+        total_signals = sum(item["signal_count"] for item in items)
+        sig_word = "signal" if total_signals == 1 else "signals"
+        lines.append(f"{RISK_LABELS[status]} ({num_cols} {col_word})")
+        lines.append(f"{total_signals} {sig_word}")
         lines.append("")
+        for item in items:
+            chain_str = str(item.get("chain", "ethereum")).capitalize()
+            lines.append(f"{number}. {item['collection']} · {chain_str}")
+            sig_count = item["signal_count"]
+            lines.append(f"   {sig_count} {'signal' if sig_count == 1 else 'signals'}")
+
+            min_c = item.get("min_change")
+            max_c = item.get("max_change")
+            if min_c is not None and max_c is not None:
+                if sig_count > 1 and min_c != max_c:
+                    lines.append(f"   Range: {min_c:+.1f}% → {max_c:+.1f}%")
+                elif sig_count > 1:
+                    lines.append(f"   Range: {min_c:+.1f}%")
+                else:
+                    lines.append(f"   {min_c:+.1f}%")
+            else:
+                lines.append(f"   {item.get('type', 'alert')}")
+
+            current = item.get("current_floor")
+            if isinstance(current, (int, float)):
+                lines.append(f"   Current: {current:g} ETH")
+
+            lines.append("")
+            number += 1
     return "\n".join(lines).rstrip()
 
 
