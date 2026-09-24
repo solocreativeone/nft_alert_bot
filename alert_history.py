@@ -24,18 +24,37 @@ def record_alert(alert_type, collection, previous_floor=None, current_floor=None
                  change_percent=None, risk_status=None, risk_reasons=None, context=None):
     """Build and persist one alert record after delivery has succeeded."""
     timestamp = datetime.now(timezone.utc).isoformat()
+    chain = (collection.get("chain") or "ethereum").lower()
+    contract = collection.get("contract")
+
+    final_risk_details = None
+    if risk_status is not None and risk_status in RISK_STATUSES:
+        final_risk_status = risk_status
+        final_risk_reasons = list(risk_reasons or [])
+    else:
+        sec = checkpoint.get_contract_security(chain, contract) if contract else None
+        if sec and sec.get("risk_status") in RISK_STATUSES:
+            final_risk_status = sec["risk_status"]
+            final_risk_reasons = list(sec.get("risk_reasons") or [])
+            final_risk_details = sec.get("risk_details")
+        else:
+            final_risk_status = "not_assessed"
+            final_risk_reasons = list(risk_reasons or [])
+
     record = {
         "timestamp": timestamp,
         "type": alert_type,
-        "chain": (collection.get("chain") or "ethereum").lower(),
+        "chain": chain,
         "collection": collection.get("name") or "Unknown",
-        "contract": collection.get("contract"),
+        "contract": contract,
         "previous_floor": previous_floor,
         "current_floor": current_floor,
         "change_percent": change_percent,
-        "risk_status": normalize_risk_status(risk_status),
-        "risk_reasons": list(risk_reasons or []),
+        "risk_status": final_risk_status,
+        "risk_reasons": final_risk_reasons,
     }
+    if final_risk_details:
+        record["risk_details"] = dict(final_risk_details)
     if context:
         record["context"] = dict(context)
     checkpoint.append_alert(record, flush_now=True)
@@ -114,7 +133,12 @@ def aggregate_alert_history(records):
         chain = items[-1].get("chain") or "ethereum"
         name = items[-1].get("collection") or "Unknown"
         contract = items[-1].get("contract")
-        status = normalize_risk_status(items[-1].get("risk_status"))
+
+        contract_sec = checkpoint.get_contract_security(chain, contract) if contract else None
+        if contract_sec and contract_sec.get("risk_status") in RISK_STATUSES:
+            status = contract_sec["risk_status"]
+        else:
+            status = normalize_risk_status(items[-1].get("risk_status"))
 
         changes = [float(r["change_percent"]) for r in items if r.get("change_percent") is not None]
         floors = [r["current_floor"] for r in items if isinstance(r.get("current_floor"), (int, float))]

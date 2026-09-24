@@ -73,7 +73,7 @@ _hooks_installed = False
 
 
 def _empty_state():
-    return {"version": VERSION, "blocks": {}, "signatures": {}, "seen": {}, "gemini": {}, "floors": {}, "alerts": []}
+    return {"version": VERSION, "blocks": {}, "signatures": {}, "seen": {}, "gemini": {}, "floors": {}, "alerts": [], "contract_security": {}}
 
 
 def _coerce(raw):
@@ -134,6 +134,24 @@ def _coerce(raw):
     alerts = raw.get("alerts")
     if isinstance(alerts, list):
         state["alerts"] = [item for item in alerts if isinstance(item, dict)][-ALERT_HISTORY_LIMIT:]
+
+    contract_security = raw.get("contract_security")
+    if isinstance(contract_security, dict):
+        for key, entry in contract_security.items():
+            if not isinstance(entry, dict):
+                continue
+            status = entry.get("risk_status")
+            if status not in ("looks_legit", "suspicious", "high_risk", "not_assessed"):
+                continue
+            reasons = entry.get("risk_reasons")
+            details = entry.get("risk_details")
+            updated_at = entry.get("updated_at")
+            state["contract_security"][str(key)] = {
+                "risk_status": status,
+                "risk_reasons": list(reasons) if isinstance(reasons, list) else [],
+                "risk_details": dict(details) if isinstance(details, dict) else {},
+                "updated_at": updated_at,
+            }
 
     return state
 
@@ -422,6 +440,57 @@ def update_alerts(matcher, updater, flush_now: bool = True) -> int:
         _mark_dirty()
         flush(force=flush_now)
     return changed
+
+
+# ── Persistent contract-level security ────────────────────────────────────────
+
+def _contract_security_key(chain: str, contract: str) -> str:
+    normalized_chain = (chain or "ethereum").strip().lower()
+    normalized_contract = (contract or "").strip().lower()
+    return f"{normalized_chain}:{normalized_contract}"
+
+
+def get_contract_security(chain: str, contract: str) -> dict | None:
+    """Look up persisted security record for chain + contract."""
+    if not contract:
+        return None
+    key = _contract_security_key(chain, contract)
+    state = load()
+    entry = state.get("contract_security", {}).get(key)
+    if not isinstance(entry, dict):
+        return None
+    return dict(entry)
+
+
+def set_contract_security(chain: str, contract: str, risk_status: str,
+                          risk_reasons: list | None = None,
+                          risk_details: dict | None = None,
+                          updated_at: str | None = None,
+                          flush_now: bool = True) -> dict | None:
+    """Persist security record for chain + normalized contract."""
+    if not contract:
+        return None
+    key = _contract_security_key(chain, contract)
+    state = load()
+    if "contract_security" not in state:
+        state["contract_security"] = {}
+
+    from datetime import datetime, timezone
+    if updated_at is None:
+        updated_at = datetime.now(timezone.utc).isoformat()
+
+    valid_status = risk_status if risk_status in ("looks_legit", "suspicious", "high_risk", "not_assessed") else "not_assessed"
+
+    entry = {
+        "risk_status": valid_status,
+        "risk_reasons": list(risk_reasons or []),
+        "risk_details": dict(risk_details or {}),
+        "updated_at": updated_at,
+    }
+    state["contract_security"][key] = entry
+    _mark_dirty()
+    flush(force=flush_now)
+    return dict(entry)
 
 
 # ── Test / maintenance helpers ───────────────────────────────────────────────

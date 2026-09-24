@@ -505,6 +505,13 @@ async def inspect_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             collection_name = item.get("name")
             break
     import checkpoint
+    checkpoint.set_contract_security(
+        chain=result["chain"],
+        contract=result["contract"],
+        risk_status=result["risk"],
+        risk_reasons=result.get("flags", []),
+        risk_details=result.get("details", {}),
+    )
     checkpoint.update_alerts(
         lambda item: normalize_contract(item.get("contract")) == result["contract"] and item.get("chain", "ethereum").lower() == result["chain"],
         lambda item: item.update({"risk_status": result["risk"], "risk_reasons": result.get("flags", []), "risk_details": result.get("details", {})}),
