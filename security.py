@@ -47,11 +47,22 @@ class HoneypotProvider:
         self.http_get = http_get
 
     def inspect(self, contract, chain, chain_id):
-        response = self.http_get(
-            "https://api.honeypot.is/v2/IsHoneypot",
-            params={"address": contract, "chainID": chain_id},
-            headers=_headers(self.api_key), timeout=15,
-        )
+        try:
+            response = self.http_get(
+                "https://api.honeypot.is/v2/IsHoneypot",
+                params={"address": contract, "chainID": chain_id},
+                headers=_headers(self.api_key), timeout=15,
+            )
+        except Exception as exc:
+            resp = getattr(exc, "response", None)
+            status = getattr(resp, "status_code", getattr(resp, "status", None))
+            if status == 404:
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = {}
+                return {"empty_response": True, "raw": body}
+            raise
         status_code = getattr(response, "status_code", getattr(response, "status", 200))
         if status_code == 400:
             try:
@@ -61,9 +72,17 @@ class HoneypotProvider:
             except Exception:
                 pass
         if status_code == 404:
-            return {"empty_response": True, "raw": {}}
+            try:
+                body = response.json()
+            except Exception:
+                body = {}
+            return {"empty_response": True, "raw": body}
         response.raise_for_status()
-        return response.json()
+        payload = response.json()
+        if isinstance(payload, dict):
+            if payload.get("code") == 404 or "token not found" in str(payload.get("error", "")).lower():
+                return {"empty_response": True, "raw": payload}
+        return payload
 
 
 class GoPlusProvider:
@@ -168,14 +187,23 @@ def normalize_result(contract, chain, provider_name, raw):
         }
     details = {"provider": provider_name}
     if provider_name == "Honeypot.is":
-        if isinstance(raw, dict) and raw.get("empty_response"):
+        if isinstance(raw, dict) and (
+            raw.get("empty_response")
+            or raw.get("code") == 404
+            or "token not found" in str(raw.get("error", "")).lower()
+        ):
             return {
                 "contract": contract,
                 "chain": chain,
                 "risk": "not_assessed",
                 "flags": [],
-                "details": {"provider": provider_name, "empty_response": True},
+                "details": {
+                    "provider": provider_name,
+                    "empty_response": True,
+                    "message": "Honeypot.is has no assessment data for this contract.",
+                },
                 "empty_response": True,
+                "message": "Honeypot.is has no assessment data for this contract.",
             }
         token = raw.get("token") or {}
         summary = raw.get("summary") or {}

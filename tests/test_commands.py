@@ -287,3 +287,50 @@ def test_inspect_command_replaces_temporary_message(monkeypatch):
     assert "🔎 Contract Inspection" in mock_msg.status_msg.text
     assert "Security provider does not currently support Arc." in mock_msg.status_msg.text
 
+
+def test_inspect_command_honeypot_404_token_not_found(monkeypatch, tmp_path):
+    import security
+    monkeypatch.setattr(commands, "CHAT_ID", "123")
+    checkpoint.use_path(str(tmp_path / "state.json"))
+    contract = "0x" + "e" * 40
+    update, msg = _fake_update("123")
+    ctx = types.SimpleNamespace(args=[contract, "base"])
+
+    class Mock404Response:
+        status_code = 404
+        status = 404
+
+        def raise_for_status(self):
+            raise RuntimeError("404 Client Error: Not Found")
+
+        def json(self):
+            return {"code": 404, "error": "Token not found"}
+
+    monkeypatch.setattr(
+        commands,
+        "inspect_security_contract",
+        lambda *args, **kwargs: security.inspect_contract(
+            contract, "base", http_get=lambda *a, **kw: Mock404Response()
+        ),
+    )
+
+    asyncio.run(commands.inspect_command(update, ctx))
+
+    assert len(msg.sent) == 2
+    assert "🔎 Inspecting contract security…" in msg.sent[0]
+    result_text = msg.sent[1]
+    assert "🔎 Contract Inspection" in result_text
+    assert "Chain: Base" in result_text
+    assert "Risk: ⚪ Not Assessed" in result_text
+    assert "Provider:\n• Honeypot.is has no assessment data for this contract." in result_text
+    assert "No security assessment data available for this contract." not in result_text
+    assert "Suspicious" not in result_text
+    assert "High Risk" not in result_text
+    assert "⚠️ Automated assessment. Not a guarantee of safety." in result_text
+
+    # Verify persisted contract security record
+    sec = checkpoint.get_contract_security("base", contract)
+    assert sec is not None
+    assert sec["risk_status"] == "not_assessed"
+    assert sec["risk_reasons"] == []
+

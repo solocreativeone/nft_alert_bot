@@ -118,6 +118,20 @@ def test_inspect_empty_provider_response():
     res_hp = security.inspect_contract(CONTRACT, "base", "honey", "key", http_get=get_honeypot)
     assert res_hp["risk"] == "not_assessed"
     assert res_hp["details"]["empty_response"] is True
+    assert res_hp["details"]["message"] == "Honeypot.is has no assessment data for this contract."
+
+
+def test_inspect_honeypot_404_token_not_found():
+    def get_honeypot(url, **kwargs):
+        return Response({"code": 404, "error": "Token not found"}, status=404)
+
+    result = security.inspect_contract(CONTRACT, "base", "honey", "key", http_get=get_honeypot)
+    assert result["risk"] == "not_assessed"
+    assert result["flags"] == []
+    assert result["details"]["provider"] == "Honeypot.is"
+    assert result["details"]["empty_response"] is True
+    assert result["details"]["message"] == "Honeypot.is has no assessment data for this contract."
+    assert result["message"] == "Honeypot.is has no assessment data for this contract."
 
 
 def test_inspect_goplus_system_error_raises_runtime_error():

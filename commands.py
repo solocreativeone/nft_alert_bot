@@ -453,7 +453,16 @@ def _format_inspection(result, collection_name=None):
         lines.extend(security_lines)
     else:
         lines.append("Provider:")
-        lines.append("• No security assessment data available for this contract.")
+        provider = details.get("provider")
+        msg = result.get("message") or details.get("message")
+        if not msg:
+            if provider == "Honeypot.is":
+                msg = "Honeypot.is has no assessment data for this contract."
+            else:
+                msg = "No security assessment data available for this contract."
+        if msg.startswith("• "):
+            msg = msg[2:]
+        lines.append(f"• {msg}")
 
     lines += ["", "⚠️ Automated assessment. Not a guarantee of safety."]
     return "\n".join(lines)
