@@ -1,4 +1,4 @@
-# 🤖 NFT Alert Bot
+# 🤖NFT Alert Bot
 
 ### *Your Real-Time Gateway to the NFT Space - Direct to Telegram* 🚀
 
