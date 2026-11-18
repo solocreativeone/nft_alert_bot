@@ -1,6 +1,6 @@
 # 🤖NFT Alert Bot
 
-### *Your Real-Time Gateway to the NFT Space - Direct to Telegram* 🚀
+### *Your Real-Time Gateway to the NFT Space - Direct to Telegram*
 
 An intelligent, multi-chain NFT crawler and tracker that monitors new collection drops on **Ethereum, Polygon, Base, Arbitrum, Optimism, and Robinhood Chain**, alongside upcoming mint schedules on **NFTCalendar**. It delivers real-time alerts straight to your Telegram DM, complete with high-resolution image previews, on-chain legitimacy scoring by **Gemini AI**, DEX liquidity detection, deployer history tracking, and direct OpenSea/explorer links.
 
